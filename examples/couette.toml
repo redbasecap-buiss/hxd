@@ -1,0 +1,32 @@
+# FLUX Configuration: Couette Flow (Shear-Driven)
+# Analytical steady-state: u(y) = U_wall × y/H (linear profile)
+
+[simulation]
+name = "couette"
+lattice = "D2Q9"
+collision = "BGK"
+
+[domain]
+nx = 5
+ny = 51
+
+[physics]
+tau = 0.8                  # ν = (2×0.8 - 1)/6 = 0.1
+wall_velocity = 0.05       # top wall velocity
+
+[time]
+max_steps = 50_000
+convergence_threshold = 1e-12
+check_interval = 1000
+
+[boundary]
+north = { type = "velocity", ux = 0.05, uy = 0.0 }  # moving wall
+south = { type = "bounce_back" }                       # stationary wall
+east  = { type = "periodic" }
+west  = { type = "periodic" }
+
+[output]
+format = "vtk"
+directory = "output/couette"
+interval = 10_000
+fields = ["velocity", "density"]

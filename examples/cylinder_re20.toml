@@ -1,0 +1,40 @@
+# FLUX Configuration: Flow Past Circular Cylinder at Re = 20
+# Steady symmetric wake expected; Cd ≈ 2.0
+
+[simulation]
+name = "cylinder_re20"
+lattice = "D2Q9"
+collision = "BGK"
+
+[domain]
+nx = 400
+ny = 200
+
+[physics]
+reynolds = 20.0
+inlet_velocity = 0.05
+viscosity_from_re = true
+reference_length = 20      # cylinder diameter in lattice units
+
+[obstacle]
+type = "cylinder"
+center_x = 80
+center_y = 100
+radius = 10
+
+[time]
+max_steps = 200_000
+convergence_threshold = 1e-7
+check_interval = 5000
+
+[boundary]
+north = { type = "bounce_back" }
+south = { type = "bounce_back" }
+east  = { type = "zou_he_pressure", rho = 1.0 }
+west  = { type = "zou_he_velocity", ux = 0.05, uy = 0.0 }
+
+[output]
+format = "vtk"
+directory = "output/cylinder_re20"
+interval = 20_000
+fields = ["velocity", "density", "vorticity"]

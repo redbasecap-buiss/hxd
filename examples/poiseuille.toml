@@ -1,0 +1,33 @@
+# FLUX Configuration: Poiseuille Flow (Pressure-Driven Channel)
+# Analytical solution: u(y) = (G/2ν) y(H-y)
+
+[simulation]
+name = "poiseuille"
+lattice = "D2Q9"
+collision = "BGK"
+
+[domain]
+nx = 5
+ny = 41
+
+[physics]
+tau = 0.8                  # relaxation time → ν = (2τ-1)/6 = 0.1
+body_force_x = 1.0e-5     # pressure gradient equivalent
+body_force_y = 0.0
+
+[time]
+max_steps = 50_000
+convergence_threshold = 1e-12
+check_interval = 1000
+
+[boundary]
+north = { type = "bounce_back" }   # solid wall
+south = { type = "bounce_back" }   # solid wall
+east  = { type = "periodic" }
+west  = { type = "periodic" }
+
+[output]
+format = "vtk"
+directory = "output/poiseuille"
+interval = 10_000
+fields = ["velocity", "density"]

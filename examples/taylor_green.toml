@@ -1,0 +1,35 @@
+# FLUX Configuration: Taylor-Green Vortex Decay
+# Analytical: u = U₀ cos(kx)sin(ky)exp(-2νk²t)
+
+[simulation]
+name = "taylor_green"
+lattice = "D2Q9"
+collision = "BGK"
+
+[domain]
+nx = 128
+ny = 128
+
+[physics]
+tau = 0.6                     # ν = (2×0.6 - 1)/6 ≈ 0.0333
+initial_amplitude = 0.01      # U₀ in lattice units
+wavenumber = 1                # k = 2π/L
+
+[initial_condition]
+type = "taylor_green"
+
+[time]
+max_steps = 50_000
+check_interval = 1000
+
+[boundary]
+north = { type = "periodic" }
+south = { type = "periodic" }
+east  = { type = "periodic" }
+west  = { type = "periodic" }
+
+[output]
+format = "vtk"
+directory = "output/taylor_green"
+interval = 5_000
+fields = ["velocity", "density", "vorticity"]

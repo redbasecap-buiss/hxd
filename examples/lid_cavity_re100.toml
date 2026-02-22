@@ -1,0 +1,36 @@
+# FLUX Configuration: Lid-Driven Cavity at Re = 100
+# Reference: Ghia, Ghia & Shin, J. Comp. Phys. 48, 387-411 (1982)
+
+[simulation]
+name = "lid_cavity_re100"
+lattice = "D2Q9"
+collision = "BGK"
+
+[domain]
+nx = 129
+ny = 129
+
+[physics]
+reynolds = 100.0
+lid_velocity = 0.1       # lattice units (Ma ≈ 0.058)
+viscosity_from_re = true  # compute τ from Re, U_lid, and N
+
+[time]
+max_steps = 100_000
+convergence_threshold = 1e-8
+check_interval = 1000
+
+[boundary]
+north = { type = "velocity", ux = 0.1, uy = 0.0 }  # moving lid
+south = { type = "bounce_back" }
+east  = { type = "bounce_back" }
+west  = { type = "bounce_back" }
+
+[output]
+format = "vtk"
+directory = "output/cavity_re100"
+interval = 10_000
+fields = ["velocity", "density", "vorticity"]
+
+[validation]
+reference = "validation/ghia_re100.csv"
