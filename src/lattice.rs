@@ -49,34 +49,48 @@ pub const CS2: f64 = 1.0 / 3.0;
 
 /// D3Q19 discrete velocity vectors (x, y, z)
 pub const D3Q19_E: [(i32, i32, i32); 19] = [
-    (0, 0, 0),    // 0: rest
-    (1, 0, 0),    // 1
-    (-1, 0, 0),   // 2
-    (0, 1, 0),    // 3
-    (0, -1, 0),   // 4
-    (0, 0, 1),    // 5
-    (0, 0, -1),   // 6
-    (1, 1, 0),    // 7
-    (-1, 1, 0),   // 8
-    (1, -1, 0),   // 9
-    (-1, -1, 0),  // 10
-    (1, 0, 1),    // 11
-    (-1, 0, 1),   // 12
-    (1, 0, -1),   // 13
-    (-1, 0, -1),  // 14
-    (0, 1, 1),    // 15
-    (0, -1, 1),   // 16
-    (0, 1, -1),   // 17
-    (0, -1, -1),  // 18
+    (0, 0, 0),   // 0: rest
+    (1, 0, 0),   // 1
+    (-1, 0, 0),  // 2
+    (0, 1, 0),   // 3
+    (0, -1, 0),  // 4
+    (0, 0, 1),   // 5
+    (0, 0, -1),  // 6
+    (1, 1, 0),   // 7
+    (-1, 1, 0),  // 8
+    (1, -1, 0),  // 9
+    (-1, -1, 0), // 10
+    (1, 0, 1),   // 11
+    (-1, 0, 1),  // 12
+    (1, 0, -1),  // 13
+    (-1, 0, -1), // 14
+    (0, 1, 1),   // 15
+    (0, -1, 1),  // 16
+    (0, 1, -1),  // 17
+    (0, -1, -1), // 18
 ];
 
 /// D3Q19 weights
 pub const D3Q19_W: [f64; 19] = [
-    1.0 / 3.0,  // rest
-    1.0 / 18.0, 1.0 / 18.0, 1.0 / 18.0, 1.0 / 18.0, 1.0 / 18.0, 1.0 / 18.0, // axis-aligned
-    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, // diagonal xy
-    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, // diagonal xz
-    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, // diagonal yz
+    1.0 / 3.0, // rest
+    1.0 / 18.0,
+    1.0 / 18.0,
+    1.0 / 18.0,
+    1.0 / 18.0,
+    1.0 / 18.0,
+    1.0 / 18.0, // axis-aligned
+    1.0 / 36.0,
+    1.0 / 36.0,
+    1.0 / 36.0,
+    1.0 / 36.0, // diagonal xy
+    1.0 / 36.0,
+    1.0 / 36.0,
+    1.0 / 36.0,
+    1.0 / 36.0, // diagonal xz
+    1.0 / 36.0,
+    1.0 / 36.0,
+    1.0 / 36.0,
+    1.0 / 36.0, // diagonal yz
 ];
 
 /// D3Q19 opposite direction indices
@@ -180,13 +194,16 @@ impl Lattice2D {
         let mut feq = [0.0; 9];
         for q in 0..9 {
             let eu = D2Q9_E[q].0 as f64 * ux + D2Q9_E[q].1 as f64 * uy;
-            feq[q] = D2Q9_W[q] * rho * (1.0 + eu / CS2 + eu * eu / (2.0 * CS2 * CS2) - usq / (2.0 * CS2));
+            feq[q] = D2Q9_W[q]
+                * rho
+                * (1.0 + eu / CS2 + eu * eu / (2.0 * CS2 * CS2) - usq / (2.0 * CS2));
         }
         feq
     }
 
     /// Compute the local strain rate tensor magnitude |S| for Smagorinsky model.
     #[inline]
+    #[allow(dead_code)]
     fn strain_rate_magnitude(&self, x: usize, y: usize, rho: f64, ux: f64, uy: f64) -> f64 {
         let feq = Self::equilibrium(rho, ux, uy);
         let mut pi_neq_xx = 0.0;
@@ -207,6 +224,7 @@ impl Lattice2D {
 
     /// Compute effective tau with Smagorinsky LES model
     #[inline]
+    #[allow(dead_code)]
     fn effective_tau(&self, x: usize, y: usize, rho: f64, ux: f64, uy: f64) -> f64 {
         if self.c_smag <= 0.0 {
             return self.tau;
@@ -214,7 +232,8 @@ impl Lattice2D {
         let s_mag = self.strain_rate_magnitude(x, y, rho, ux, uy);
         let tau0 = self.tau;
         // τ_eff = 0.5 * (τ + √(τ² + 18·C_s²·|Π_neq| / (ρ·cs⁴)))
-        let discriminant = tau0 * tau0 + 18.0 * self.c_smag * self.c_smag * s_mag / (rho * CS2 * CS2);
+        let discriminant =
+            tau0 * tau0 + 18.0 * self.c_smag * self.c_smag * s_mag / (rho * CS2 * CS2);
         0.5 * (tau0 + discriminant.sqrt())
     }
 
@@ -227,7 +246,6 @@ impl Lattice2D {
         let c_smag = self.c_smag;
 
         // We process rows in parallel
-        let chunk_size = nx; // one row
         let row_data: Vec<(usize, Vec<f64>)> = (0..ny)
             .into_par_iter()
             .map(|y| {
@@ -443,7 +461,8 @@ impl Lattice2D {
     pub fn set_equilibrium(&mut self, x: usize, y: usize, rho: f64, ux: f64, uy: f64) {
         let feq = Self::equilibrium(rho, ux, uy);
         for q in 0..9 {
-            self.f[self.idx(q, x, y)] = feq[q];
+            let idx = self.idx(q, x, y);
+            self.f[idx] = feq[q];
         }
     }
 
@@ -580,11 +599,10 @@ impl Lattice3D {
         let usq = ux * ux + uy * uy + uz * uz;
         let mut feq = [0.0; 19];
         for q in 0..19 {
-            let eu = D3Q19_E[q].0 as f64 * ux
-                + D3Q19_E[q].1 as f64 * uy
-                + D3Q19_E[q].2 as f64 * uz;
-            feq[q] =
-                D3Q19_W[q] * rho * (1.0 + eu / CS2 + eu * eu / (2.0 * CS2 * CS2) - usq / (2.0 * CS2));
+            let eu = D3Q19_E[q].0 as f64 * ux + D3Q19_E[q].1 as f64 * uy + D3Q19_E[q].2 as f64 * uz;
+            feq[q] = D3Q19_W[q]
+                * rho
+                * (1.0 + eu / CS2 + eu * eu / (2.0 * CS2 * CS2) - usq / (2.0 * CS2));
         }
         feq
     }
@@ -692,7 +710,8 @@ impl Lattice3D {
     ) {
         let feq = Self::equilibrium(rho, ux, uy, uz);
         for q in 0..19 {
-            self.f[self.idx(q, x, y, z)] = feq[q];
+            let idx = self.idx(q, x, y, z);
+            self.f[idx] = feq[q];
         }
     }
 }
@@ -739,7 +758,10 @@ mod tests {
         let uy = -0.05;
         let feq = Lattice2D::equilibrium(rho, ux, uy);
         let sum: f64 = feq.iter().sum();
-        assert!((sum - rho).abs() < 1e-14, "Mass not conserved: sum={sum}, rho={rho}");
+        assert!(
+            (sum - rho).abs() < 1e-14,
+            "Mass not conserved: sum={sum}, rho={rho}"
+        );
     }
 
     #[test]

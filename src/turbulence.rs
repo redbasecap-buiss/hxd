@@ -1,737 +1,518 @@
-//! Turbulence models for Lattice Boltzmann Methods.
+//! Turbulence models for LBM simulations.
 //!
-//! Includes Smagorinsky LES, WALE, Entropic LBM, Regularized LBM,
-//! and Cumulant collision operator.
+//! # Smagorinsky Large Eddy Simulation (LES)
+//!
+//! The Smagorinsky subgrid-scale model computes a turbulent (eddy) viscosity:
+//!
+//! νt = (Cs · Δ)² · |S|
+//!
+//! where:
+//! - Cs is the Smagorinsky constant (typically 0.1–0.2)
+//! - Δ is the grid spacing (= 1 in lattice units)
+//! - |S| is the magnitude of the strain rate tensor
+//!
+//! The effective relaxation time becomes:
+//!
+//! τ_eff = 0.5 * (τ₀ + √(τ₀² + 18·Cs²·|Π_neq|/(ρ·cs⁴)))
+//!
+//! # References
+//! - Smagorinsky, J. (1963). "General circulation experiments with the primitive equations."
+//! - Hou, S. et al. (1996). "Simulation of Cavity Flow by the Lattice Boltzmann Method."
+//! - Yu, H. et al. (2005). "LES of turbulent square jet flow using an MRT lattice Boltzmann model."
 
-use std::f64::consts::PI;
+use crate::lattice::{Lattice2D, CS2, D2Q9_E};
 
-// ── D2Q9 lattice constants ──────────────────────────────────────────────────
-
-/// D2Q9 weights.
-pub const W: [f64; 9] = [
-    4.0 / 9.0,
-    1.0 / 9.0,
-    1.0 / 9.0,
-    1.0 / 9.0,
-    1.0 / 9.0,
-    1.0 / 36.0,
-    1.0 / 36.0,
-    1.0 / 36.0,
-    1.0 / 36.0,
-];
-
-/// D2Q9 discrete velocities (cx, cy).
-pub const C: [(i32, i32); 9] = [
-    (0, 0),
-    (1, 0),
-    (0, 1),
-    (-1, 0),
-    (0, -1),
-    (1, 1),
-    (-1, 1),
-    (-1, -1),
-    (1, -1),
-];
-
-/// Speed of sound squared for D2Q9: cs² = 1/3.
-pub const CS2: f64 = 1.0 / 3.0;
-
-// ── Utility: strain-rate tensor from non-equilibrium stress ──────────────
-
-/// Compute the strain-rate magnitude |S| from the distribution functions
-/// using the non-equilibrium stress tensor approach.
-///
-/// For D2Q9: Sαβ = -(1/(2τρcs²)) Σ_i c_iα c_iβ f^neq_i
-/// |S| = sqrt(2 Sαβ Sαβ)
-pub fn strain_rate_magnitude(f: &[f64; 9], feq: &[f64; 9], tau: f64, rho: f64) -> f64 {
-    let mut s_xx = 0.0;
-    let mut s_xy = 0.0;
-    let mut s_yy = 0.0;
-    let factor = -1.0 / (2.0 * tau * rho * CS2);
-    for i in 0..9 {
-        let fneq = f[i] - feq[i];
-        let cx = C[i].0 as f64;
-        let cy = C[i].1 as f64;
-        s_xx += cx * cx * fneq;
-        s_xy += cx * cy * fneq;
-        s_yy += cy * cy * fneq;
-    }
-    s_xx *= factor;
-    s_xy *= factor;
-    s_yy *= factor;
-    (2.0 * (s_xx * s_xx + 2.0 * s_xy * s_xy + s_yy * s_yy)).sqrt()
-}
-
-/// Compute equilibrium distribution for D2Q9.
-pub fn equilibrium(rho: f64, ux: f64, uy: f64) -> [f64; 9] {
-    let mut feq = [0.0; 9];
-    let u2 = ux * ux + uy * uy;
-    for i in 0..9 {
-        let cx = C[i].0 as f64;
-        let cy = C[i].1 as f64;
-        let cu = cx * ux + cy * uy;
-        feq[i] = W[i] * rho * (1.0 + cu / CS2 + cu * cu / (2.0 * CS2 * CS2) - u2 / (2.0 * CS2));
-    }
-    feq
-}
-
-/// Compute macroscopic density and velocity from distributions.
-pub fn macroscopic(f: &[f64; 9]) -> (f64, f64, f64) {
-    let mut rho = 0.0;
-    let mut ux = 0.0;
-    let mut uy = 0.0;
-    for i in 0..9 {
-        rho += f[i];
-        ux += C[i].0 as f64 * f[i];
-        uy += C[i].1 as f64 * f[i];
-    }
-    if rho.abs() > 1e-15 {
-        ux /= rho;
-        uy /= rho;
-    }
-    (rho, ux, uy)
-}
-
-// ── Smagorinsky LES Model ──────────────────────────────────────────────────
-
-/// Smagorinsky Large Eddy Simulation model.
-///
-/// Subgrid-scale viscosity: νt = (Cs · Δ)² · |S|
-/// where Cs is the Smagorinsky constant and Δ is the grid spacing.
-#[derive(Debug, Clone, Copy)]
-pub struct Smagorinsky {
-    /// Smagorinsky constant, typically 0.1–0.2.
+/// Smagorinsky LES model parameters
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct SmagorinskyModel {
+    /// Smagorinsky constant Cs (typically 0.1–0.2)
     pub cs: f64,
-    /// Grid spacing (lattice units, typically 1.0).
+    /// Grid spacing Δ (= 1 in lattice units)
     pub delta: f64,
-    /// Base relaxation time.
-    pub tau0: f64,
 }
 
-impl Smagorinsky {
-    /// Create a new Smagorinsky model.
+impl SmagorinskyModel {
+    /// Create a new Smagorinsky model with given constant.
+    pub fn new(cs: f64) -> Self {
+        Self { cs, delta: 1.0 }
+    }
+
+    /// Create with custom grid spacing (for non-uniform grids).
+    pub fn with_delta(cs: f64, delta: f64) -> Self {
+        Self { cs, delta }
+    }
+
+    /// Compute the non-equilibrium stress tensor components from distributions.
     ///
-    /// # Panics
-    /// Panics if `cs` is not in a reasonable range.
-    pub fn new(cs: f64, tau0: f64) -> Self {
-        assert!(
-            (0.05..=0.3).contains(&cs),
-            "Smagorinsky constant should be in [0.05, 0.3], got {cs}"
-        );
-        Self {
-            cs,
-            delta: 1.0,
-            tau0,
-        }
-    }
-
-    /// Compute the subgrid-scale eddy viscosity νt.
-    pub fn eddy_viscosity(&self, strain_rate: f64) -> f64 {
-        (self.cs * self.delta).powi(2) * strain_rate
-    }
-
-    /// Compute the effective relaxation time τ_eff = τ₀ + τ_t.
-    /// The turbulent relaxation time τ_t = 3 νt.
-    pub fn effective_tau(&self, f: &[f64; 9], feq: &[f64; 9], rho: f64) -> f64 {
-        let s_mag = strain_rate_magnitude(f, feq, self.tau0, rho);
-        let nu_t = self.eddy_viscosity(s_mag);
-        self.tau0 + 3.0 * nu_t
-    }
-
-    /// Perform Smagorinsky-modified BGK collision.
-    pub fn collide(&self, f: &mut [f64; 9]) {
-        let (rho, ux, uy) = macroscopic(f);
-        let feq = equilibrium(rho, ux, uy);
-        let tau_eff = self.effective_tau(f, &feq, rho);
-        let omega = 1.0 / tau_eff;
-        for i in 0..9 {
-            f[i] += -omega * (f[i] - feq[i]);
-        }
-    }
-}
-
-// ── WALE Model ──────────────────────────────────────────────────────────────
-
-/// Wall-Adapting Local Eddy-viscosity (WALE) model.
-///
-/// Better near-wall behavior than Smagorinsky: νt → 0 as y³ near walls
-/// (correct asymptotic behavior), vs y² for Smagorinsky.
-#[derive(Debug, Clone, Copy)]
-pub struct Wale {
-    /// WALE constant, typically ~0.325.
-    pub cw: f64,
-    /// Grid spacing.
-    pub delta: f64,
-    /// Base relaxation time.
-    pub tau0: f64,
-}
-
-impl Wale {
-    pub fn new(cw: f64, tau0: f64) -> Self {
-        Self {
-            cw,
-            delta: 1.0,
-            tau0,
-        }
-    }
-
-    /// Compute WALE eddy viscosity from the velocity gradient tensor.
-    ///
-    /// `grad_u` is \[\[du/dx, du/dy\], \[dv/dx, dv/dy\]\].
-    pub fn eddy_viscosity(&self, grad_u: &[[f64; 2]; 2]) -> f64 {
-        // g_ij = du_i/dx_j
-        let g = grad_u;
-
-        // S_ij = 0.5 * (g_ij + g_ji)  (strain rate)
-        let s = [
-            [g[0][0], 0.5 * (g[0][1] + g[1][0])],
-            [0.5 * (g[0][1] + g[1][0]), g[1][1]],
-        ];
-
-        // g²_ij = g_ik * g_kj (squared velocity gradient)
-        let g2 = [
-            [
-                g[0][0] * g[0][0] + g[0][1] * g[1][0],
-                g[0][0] * g[0][1] + g[0][1] * g[1][1],
-            ],
-            [
-                g[1][0] * g[0][0] + g[1][1] * g[1][0],
-                g[1][0] * g[0][1] + g[1][1] * g[1][1],
-            ],
-        ];
-
-        // Traceless symmetric part: S^d_ij = 0.5*(g²_ij + g²_ji) - (1/3)*δ_ij*g²_kk
-        // In 2D we use (1/2) for the trace term
-        let trace_g2 = g2[0][0] + g2[1][1];
-        let sd = [
-            [
-                0.5 * (g2[0][0] + g2[0][0]) - 0.5 * trace_g2,
-                0.5 * (g2[0][1] + g2[1][0]),
-            ],
-            [
-                0.5 * (g2[0][1] + g2[1][0]),
-                0.5 * (g2[1][1] + g2[1][1]) - 0.5 * trace_g2,
-            ],
-        ];
-
-        let sd_sd: f64 = sd[0][0] * sd[0][0]
-            + 2.0 * sd[0][1] * sd[0][1]
-            + sd[1][1] * sd[1][1];
-        let s_s: f64 = s[0][0] * s[0][0] + 2.0 * s[0][1] * s[0][1] + s[1][1] * s[1][1];
-
-        let numerator = sd_sd.powf(1.5);
-        let denominator = s_s.powf(2.5) + sd_sd.powf(1.25);
-
-        if denominator < 1e-30 {
-            return 0.0;
-        }
-
-        (self.cw * self.delta).powi(2) * (numerator / denominator)
-    }
-
-    /// Compute effective tau given velocity gradient tensor.
-    pub fn effective_tau(&self, grad_u: &[[f64; 2]; 2]) -> f64 {
-        let nu_t = self.eddy_viscosity(grad_u);
-        self.tau0 + 3.0 * nu_t
-    }
-}
-
-// ── Entropic LBM ────────────────────────────────────────────────────────────
-
-/// Entropic Lattice Boltzmann Method (Karlin, Bösch, Chikatamarla — ETH Zurich).
-///
-/// Unconditionally stable by satisfying the discrete H-theorem.
-/// The parameter α is found such that H(f + α·(feq - f)) ≤ H(f),
-/// ensuring entropy does not increase.
-#[derive(Debug, Clone, Copy)]
-pub struct EntropicLbm {
-    /// Base relaxation parameter (2 = full over-relaxation).
-    pub beta: f64,
-}
-
-impl EntropicLbm {
-    pub fn new(tau: f64) -> Self {
-        // β = 1/(2τ) in the entropic formulation
-        Self { beta: 1.0 / (2.0 * tau) }
-    }
-
-    /// Compute the discrete H-function: H = Σ f_i ln(f_i / w_i).
-    pub fn entropy(f: &[f64; 9]) -> f64 {
-        let mut h = 0.0;
-        for i in 0..9 {
-            if f[i] > 0.0 {
-                h += f[i] * (f[i] / W[i]).ln();
-            }
-        }
-        h
-    }
-
-    /// Find the entropy-satisfying parameter α via Newton iteration.
-    ///
-    /// We solve H(f + α·Δf) = H(f) where Δf = feq - f,
-    /// with α = 2 being the standard BGK value.
-    pub fn find_alpha(f: &[f64; 9], feq: &[f64; 9]) -> f64 {
-        let df: Vec<f64> = (0..9).map(|i| feq[i] - f[i]).collect();
-        let h0 = Self::entropy(f);
-
-        let mut alpha = 2.0; // Start with BGK value
-
-        for _ in 0..20 {
-            let mut h = 0.0;
-            let mut dh = 0.0;
-            for i in 0..9 {
-                let fi = f[i] + alpha * df[i];
-                if fi > 0.0 {
-                    h += fi * (fi / W[i]).ln();
-                    dh += df[i] * (1.0 + (fi / W[i]).ln());
-                }
-            }
-            let residual = h - h0;
-            if residual.abs() < 1e-12 {
-                break;
-            }
-            if dh.abs() < 1e-30 {
-                break;
-            }
-            alpha -= residual / dh;
-            alpha = alpha.max(0.0);
-        }
-        alpha
-    }
-
-    /// Perform entropic collision step.
-    pub fn collide(&self, f: &mut [f64; 9]) {
-        let (rho, ux, uy) = macroscopic(f);
-        let feq = equilibrium(rho, ux, uy);
-        let alpha = Self::find_alpha(f, &feq);
-        let omega = alpha * self.beta;
-        for i in 0..9 {
-            f[i] += -omega * (f[i] - feq[i]);
-        }
-    }
-}
-
-// ── Regularized LBM ────────────────────────────────────────────────────────
-
-/// Regularized LBM for improved stability at high Reynolds numbers.
-///
-/// Filters out non-hydrodynamic (ghost) modes by projecting f onto
-/// the hydrodynamic subspace before collision.
-#[derive(Debug, Clone, Copy)]
-pub struct RegularizedLbm {
-    pub tau: f64,
-}
-
-impl RegularizedLbm {
-    pub fn new(tau: f64) -> Self {
-        Self { tau }
-    }
-
-    /// Compute the non-equilibrium stress tensor Π^neq_αβ.
-    fn neq_stress(f: &[f64; 9], feq: &[f64; 9]) -> (f64, f64, f64) {
+    /// Π_neq_αβ = Σ_i (f_i - f_i^eq) · e_iα · e_iβ
+    #[inline]
+    pub fn non_equilibrium_stress(fi: &[f64; 9], feq: &[f64; 9]) -> (f64, f64, f64) {
         let mut pi_xx = 0.0;
         let mut pi_xy = 0.0;
         let mut pi_yy = 0.0;
-        for i in 0..9 {
-            let fneq = f[i] - feq[i];
-            let cx = C[i].0 as f64;
-            let cy = C[i].1 as f64;
-            pi_xx += cx * cx * fneq;
-            pi_xy += cx * cy * fneq;
-            pi_yy += cy * cy * fneq;
+        for q in 0..9 {
+            let fneq = fi[q] - feq[q];
+            let ex = D2Q9_E[q].0 as f64;
+            let ey = D2Q9_E[q].1 as f64;
+            pi_xx += ex * ex * fneq;
+            pi_xy += ex * ey * fneq;
+            pi_yy += ey * ey * fneq;
         }
         (pi_xx, pi_xy, pi_yy)
     }
 
-    /// Compute the regularized non-equilibrium part f^(1)_i.
-    fn regularized_fneq(
-        i: usize,
-        pi_xx: f64,
-        pi_xy: f64,
-        pi_yy: f64,
-    ) -> f64 {
-        let cx = C[i].0 as f64;
-        let cy = C[i].1 as f64;
-        let q_xx = cx * cx - CS2;
-        let q_xy = cx * cy;
-        let q_yy = cy * cy - CS2;
-        W[i] / (2.0 * CS2 * CS2) * (q_xx * pi_xx + 2.0 * q_xy * pi_xy + q_yy * pi_yy)
-    }
-
-    /// Perform regularized collision step.
-    pub fn collide(&self, f: &mut [f64; 9]) {
-        let (rho, ux, uy) = macroscopic(f);
-        let feq = equilibrium(rho, ux, uy);
-        let (pi_xx, pi_xy, pi_yy) = Self::neq_stress(f, &feq);
-        let omega = 1.0 / self.tau;
-
-        // Replace f with regularized version: f = feq + (1 - ω) f^(1)
-        for i in 0..9 {
-            let fneq_reg = Self::regularized_fneq(i, pi_xx, pi_xy, pi_yy);
-            f[i] = feq[i] + (1.0 - omega) * fneq_reg;
-        }
-    }
-}
-
-// ── Cumulant Collision Operator ─────────────────────────────────────────────
-
-/// Cumulant collision operator for D2Q9.
-///
-/// State-of-the-art collision operator that is Galilean invariant
-/// and has low numerical dissipation. Based on Geier et al.
-#[derive(Debug, Clone, Copy)]
-pub struct CumulantCollision {
-    /// Relaxation rate for the shear viscosity related cumulant.
-    pub omega_viscous: f64,
-    /// Relaxation rate for higher-order cumulants (can be set to 1 for simplicity).
-    pub omega_bulk: f64,
-    /// Relaxation rate for the fourth-order cumulant.
-    pub omega4: f64,
-}
-
-impl CumulantCollision {
-    pub fn new(tau: f64) -> Self {
-        Self {
-            omega_viscous: 1.0 / tau,
-            omega_bulk: 1.0 / tau,
-            omega4: 1.0,
-        }
-    }
-
-    /// Perform cumulant collision step.
+    /// Compute the magnitude of the non-equilibrium stress tensor.
     ///
-    /// 1. Compute central moments from distributions
-    /// 2. Transform to cumulants
-    /// 3. Relax cumulants independently
-    /// 4. Transform back to distributions
-    pub fn collide(&self, f: &mut [f64; 9]) {
-        let (rho, ux, uy) = macroscopic(f);
+    /// |Π_neq| = √(Π_xx² + 2·Π_xy² + Π_yy²)
+    #[inline]
+    pub fn stress_magnitude(pi_xx: f64, pi_xy: f64, pi_yy: f64) -> f64 {
+        (pi_xx * pi_xx + 2.0 * pi_xy * pi_xy + pi_yy * pi_yy).sqrt()
+    }
 
-        // Step 1: Compute central moments κ_mn = Σ_i f_i (c_ix - ux)^m (c_iy - uy)^n
-        let mut kappa = [[0.0f64; 3]; 3];
-        for i in 0..9 {
-            let dcx = C[i].0 as f64 - ux;
-            let dcy = C[i].1 as f64 - uy;
-            for m in 0..3u32 {
-                for n in 0..3u32 {
-                    kappa[m as usize][n as usize] +=
-                        f[i] * dcx.powi(m as i32) * dcy.powi(n as i32);
-                }
+    /// Compute the strain rate magnitude |S| from non-equilibrium stress.
+    ///
+    /// For D2Q9: |S| = |Π_neq| / (2·ρ·cs²·τ)
+    #[inline]
+    pub fn strain_rate_from_stress(pi_mag: f64, rho: f64, tau: f64) -> f64 {
+        pi_mag / (2.0 * rho * CS2 * tau)
+    }
+
+    /// Compute the subgrid eddy viscosity.
+    ///
+    /// νt = (Cs · Δ)² · |S|
+    #[inline]
+    pub fn eddy_viscosity(&self, strain_rate: f64) -> f64 {
+        (self.cs * self.delta).powi(2) * strain_rate
+    }
+
+    /// Compute effective tau incorporating Smagorinsky SGS model.
+    ///
+    /// Uses the formulation from Hou et al. (1996):
+    /// τ_eff = 0.5 * (τ₀ + √(τ₀² + 18·Cs²·Δ²·|Π_neq|/(ρ·cs⁴)))
+    #[inline]
+    pub fn effective_tau(&self, tau0: f64, pi_mag: f64, rho: f64) -> f64 {
+        let discriminant = tau0 * tau0
+            + 18.0 * self.cs * self.cs * self.delta * self.delta * pi_mag / (rho * CS2 * CS2);
+        0.5 * (tau0 + discriminant.sqrt())
+    }
+
+    /// Compute the effective tau for a specific lattice node.
+    pub fn effective_tau_at(&self, lattice: &Lattice2D, x: usize, y: usize) -> f64 {
+        let mut fi = [0.0; 9];
+        let mut rho = 0.0;
+        let mut ux = 0.0;
+        let mut uy = 0.0;
+        for q in 0..9 {
+            let val = lattice.f[lattice.idx(q, x, y)];
+            fi[q] = val;
+            rho += val;
+            ux += val * D2Q9_E[q].0 as f64;
+            uy += val * D2Q9_E[q].1 as f64;
+        }
+        if rho > 1e-15 {
+            ux /= rho;
+            uy /= rho;
+        }
+        let feq = Lattice2D::equilibrium(rho, ux, uy);
+        let (pi_xx, pi_xy, pi_yy) = Self::non_equilibrium_stress(&fi, &feq);
+        let pi_mag = Self::stress_magnitude(pi_xx, pi_xy, pi_yy);
+        self.effective_tau(lattice.tau, pi_mag, rho)
+    }
+
+    /// Compute the eddy viscosity field for the entire lattice.
+    pub fn eddy_viscosity_field(&self, lattice: &Lattice2D) -> Vec<f64> {
+        let nx = lattice.nx;
+        let ny = lattice.ny;
+        let mut nu_t = vec![0.0; nx * ny];
+        for y in 0..ny {
+            for x in 0..nx {
+                let tau_eff = self.effective_tau_at(lattice, x, y);
+                let nu_eff = CS2 * (tau_eff - 0.5);
+                let nu_base = CS2 * (lattice.tau - 0.5);
+                nu_t[y * nx + x] = (nu_eff - nu_base).max(0.0);
             }
         }
-
-        // Normalize by density to get cumulants (for second order, cumulants = central moments / rho)
-        // κ_00 = rho, κ_10 = κ_01 = 0 (by definition of central moments)
-
-        // Step 2: Cumulants (for D2Q9, second-order cumulants equal normalized central moments)
-        let c_20 = kappa[2][0] / rho; // = cs² at equilibrium
-        let c_02 = kappa[0][2] / rho;
-        let c_11 = kappa[1][1] / rho;
-        let c_21 = kappa[2][1] / rho;
-        let c_12 = kappa[1][2] / rho;
-        let c_22 = kappa[2][2] / rho - c_20 * c_02 - 2.0 * c_11 * c_11;
-
-        // Step 3: Equilibrium cumulants
-        let c_20_eq = CS2;
-        let c_02_eq = CS2;
-        let c_11_eq = 0.0;
-        let c_21_eq = 0.0;
-        let c_12_eq = 0.0;
-        let c_22_eq = 0.0;
-
-        // Step 4: Relax cumulants
-        // Trace (bulk): relax (c_20 + c_02) with omega_bulk
-        // Shear: relax (c_20 - c_02) and c_11 with omega_viscous
-        let trace = c_20 + c_02;
-        let trace_eq = c_20_eq + c_02_eq;
-        let diff = c_20 - c_02;
-        let diff_eq = c_20_eq - c_02_eq;
-
-        let trace_new = trace - self.omega_bulk * (trace - trace_eq);
-        let diff_new = diff - self.omega_viscous * (diff - diff_eq);
-        let c_11_new = c_11 - self.omega_viscous * (c_11 - c_11_eq);
-
-        let c_20_new = 0.5 * (trace_new + diff_new);
-        let c_02_new = 0.5 * (trace_new - diff_new);
-
-        let c_21_new = c_21 - self.omega4 * (c_21 - c_21_eq);
-        let c_12_new = c_12 - self.omega4 * (c_12 - c_12_eq);
-        let c_22_new = c_22 - self.omega4 * (c_22 - c_22_eq);
-
-        // Step 5: Reconstruct central moments from cumulants
-        let k_20 = rho * c_20_new;
-        let k_02 = rho * c_02_new;
-        let k_11 = rho * c_11_new;
-        let k_21 = rho * c_21_new;
-        let k_12 = rho * c_12_new;
-        let k_22 = rho * (c_22_new + c_20_new * c_02_new + 2.0 * c_11_new * c_11_new);
-
-        // Step 6: Reconstruct distributions from central moments
-        // Using the inverse transform for D2Q9
-        let k_00 = rho;
-
-        // f_i = Σ_{m,n} A_{i,mn} κ_mn
-        // For D2Q9, we reconstruct via the polynomial basis
-        for i in 0..9 {
-            let dcx = C[i].0 as f64 - ux;
-            let dcy = C[i].1 as f64 - uy;
-
-            // Use Gram-Schmidt-like reconstruction
-            let a0 = 1.0;
-            let a1x = dcx;
-            let a1y = dcy;
-            let a2xx = dcx * dcx - CS2;
-            let a2yy = dcy * dcy - CS2;
-            let a2xy = dcx * dcy;
-
-            f[i] = W[i]
-                * (k_00
-                    + (a2xx * k_20 + a2yy * k_02 + 2.0 * a2xy * k_11) / (CS2 * CS2)
-                    * 0.5
-                    + (a1x * (dcx * dcx - CS2) * k_21
-                        + a1y * (dcy * dcy - CS2) * k_12)
-                        / (CS2 * CS2 * CS2)
-                        * 0.5
-                    + (a2xx * a2yy) * k_22 / (CS2 * CS2 * CS2 * CS2) * 0.25);
-
-            // Ensure positivity
-            if f[i] < 0.0 {
-                f[i] = 1e-15;
-            }
-        }
-
-        // Correct mass
-        let mass: f64 = f.iter().sum();
-        if mass > 1e-15 {
-            let correction = rho / mass;
-            for fi in f.iter_mut() {
-                *fi *= correction;
-            }
-        }
+        nu_t
     }
 }
 
-// ── BGK collision for reference ─────────────────────────────────────────────
+/// Compute the Q-criterion for 2D flows (useful for vortex identification).
+///
+/// Q = 0.5 * (|Ω|² - |S|²)
+///
+/// where Ω is the vorticity tensor and S is the strain rate tensor.
+/// In 2D: Q = -(∂u/∂x)² - (∂v/∂y)² - 2·(∂u/∂y)·(∂v/∂x) ... simplified
+/// Actually Q = -0.5 * (S_ij S_ij) when using just strain (for vortex detection).
+pub fn q_criterion_field(lattice: &Lattice2D) -> Vec<f64> {
+    let nx = lattice.nx;
+    let ny = lattice.ny;
+    let mut q_field = vec![0.0; nx * ny];
 
-/// Standard BGK (Bhatnagar-Gross-Krook) collision operator.
-pub fn bgk_collide(f: &mut [f64; 9], tau: f64) {
-    let (rho, ux, uy) = macroscopic(f);
-    let feq = equilibrium(rho, ux, uy);
-    let omega = 1.0 / tau;
-    for i in 0..9 {
-        f[i] += -omega * (f[i] - feq[i]);
+    for y in 1..ny - 1 {
+        for x in 1..nx - 1 {
+            let (_, ux_r, uy_r) = macroscopic(lattice, x + 1, y);
+            let (_, ux_l, uy_l) = macroscopic(lattice, x - 1, y);
+            let (_, ux_u, uy_u) = macroscopic(lattice, x, y + 1);
+            let (_, ux_d, uy_d) = macroscopic(lattice, x, y - 1);
+
+            let dudx = (ux_r - ux_l) / 2.0;
+            let dudy = (ux_u - ux_d) / 2.0;
+            let dvdx = (uy_r - uy_l) / 2.0;
+            let dvdy = (uy_u - uy_d) / 2.0;
+
+            // Strain rate tensor: S_ij = 0.5 * (du_i/dx_j + du_j/dx_i)
+            let s11 = dudx;
+            let s22 = dvdy;
+            let s12 = 0.5 * (dudy + dvdx);
+
+            // Vorticity tensor: Ω_ij = 0.5 * (du_i/dx_j - du_j/dx_i)
+            let omega12 = 0.5 * (dudy - dvdx);
+
+            // Q = 0.5 * (|Ω|² - |S|²)
+            let omega_sq = 2.0 * omega12 * omega12;
+            let s_sq = s11 * s11 + s22 * s22 + 2.0 * s12 * s12;
+            q_field[y * nx + x] = 0.5 * (omega_sq - s_sq);
+        }
     }
+    q_field
 }
 
-// ── Tests ───────────────────────────────────────────────────────────────────
+/// Compute turbulent kinetic energy (TKE) from velocity fluctuations.
+///
+/// TKE = 0.5 * (u'² + v'²)
+/// where u' = u - ū (fluctuation from mean).
+pub fn turbulent_kinetic_energy(
+    ux: &[f64],
+    uy: &[f64],
+    ux_mean: &[f64],
+    uy_mean: &[f64],
+) -> Vec<f64> {
+    ux.iter()
+        .zip(uy.iter())
+        .zip(ux_mean.iter())
+        .zip(uy_mean.iter())
+        .map(|(((&u, &v), &um), &vm)| {
+            let up = u - um;
+            let vp = v - vm;
+            0.5 * (up * up + vp * vp)
+        })
+        .collect()
+}
+
+/// Helper: get macroscopic quantities at a node
+#[inline]
+fn macroscopic(lattice: &Lattice2D, x: usize, y: usize) -> (f64, f64, f64) {
+    let rho = lattice.density(x, y);
+    let (ux, uy) = lattice.velocity(x, y);
+    (rho, ux, uy)
+}
+
+/// Compute the resolved strain rate tensor field.
+/// Returns (S11, S12, S22) at each point using central differences.
+pub fn strain_rate_field(lattice: &Lattice2D) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let nx = lattice.nx;
+    let ny = lattice.ny;
+    let mut s11 = vec![0.0; nx * ny];
+    let mut s12 = vec![0.0; nx * ny];
+    let mut s22 = vec![0.0; nx * ny];
+
+    for y in 1..ny - 1 {
+        for x in 1..nx - 1 {
+            let (_, ux_r, uy_r) = macroscopic(lattice, x + 1, y);
+            let (_, ux_l, uy_l) = macroscopic(lattice, x - 1, y);
+            let (_, ux_u, uy_u) = macroscopic(lattice, x, y + 1);
+            let (_, ux_d, uy_d) = macroscopic(lattice, x, y - 1);
+
+            let idx = y * nx + x;
+            s11[idx] = (ux_r - ux_l) / 2.0;
+            s22[idx] = (uy_u - uy_d) / 2.0;
+            s12[idx] = 0.25 * ((ux_u - ux_d) + (uy_r - uy_l));
+        }
+    }
+    (s11, s12, s22)
+}
+
+/// Jet colormap: blue → cyan → green → yellow → red
+/// Classic "jet" colormap for scientific visualization.
+pub fn colormap_jet(t: f64) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    let r;
+    let g;
+    let b;
+
+    if t < 0.125 {
+        r = 0.0;
+        g = 0.0;
+        b = 0.5 + t / 0.125 * 0.5;
+    } else if t < 0.375 {
+        let s = (t - 0.125) / 0.25;
+        r = 0.0;
+        g = s;
+        b = 1.0;
+    } else if t < 0.625 {
+        let s = (t - 0.375) / 0.25;
+        r = s;
+        g = 1.0;
+        b = 1.0 - s;
+    } else if t < 0.875 {
+        let s = (t - 0.625) / 0.25;
+        r = 1.0;
+        g = 1.0 - s;
+        b = 0.0;
+    } else {
+        let s = (t - 0.875) / 0.125;
+        r = 1.0 - s * 0.5;
+        g = 0.0;
+        b = 0.0;
+    }
+
+    ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+}
+
+/// Write a PPM image using jet colormap for a scalar field.
+pub fn write_ppm_jet(
+    path: &std::path::Path,
+    nx: usize,
+    ny: usize,
+    field: &[f64],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let max_v = field.iter().cloned().fold(0.0f64, f64::max).max(1e-10);
+    let min_v = field.iter().cloned().fold(f64::MAX, f64::min);
+    let range = (max_v - min_v).max(1e-10);
+
+    let mut file = std::fs::File::create(path)?;
+    writeln!(file, "P6")?;
+    writeln!(file, "{} {}", nx, ny)?;
+    writeln!(file, "255")?;
+
+    for y in (0..ny).rev() {
+        for x in 0..nx {
+            let t = (field[y * nx + x] - min_v) / range;
+            let (r, g, b) = colormap_jet(t);
+            file.write_all(&[r, g, b])?;
+        }
+    }
+    Ok(())
+}
+
+/// Write velocity magnitude as PPM with jet colormap.
+pub fn write_velocity_ppm_jet(
+    path: &std::path::Path,
+    nx: usize,
+    ny: usize,
+    ux: &[f64],
+    uy: &[f64],
+) -> std::io::Result<()> {
+    let vmag: Vec<f64> = ux
+        .iter()
+        .zip(uy.iter())
+        .map(|(&u, &v)| (u * u + v * v).sqrt())
+        .collect();
+    write_ppm_jet(path, nx, ny, &vmag)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lattice::{CollisionOperator, Lattice2D};
 
-    fn make_equilibrium_f(rho: f64, ux: f64, uy: f64) -> [f64; 9] {
-        equilibrium(rho, ux, uy)
+    #[test]
+    fn test_smagorinsky_new() {
+        let smag = SmagorinskyModel::new(0.1);
+        assert!((smag.cs - 0.1).abs() < 1e-14);
+        assert!((smag.delta - 1.0).abs() < 1e-14);
     }
 
     #[test]
-    fn test_equilibrium_mass_conservation() {
-        let f = make_equilibrium_f(1.5, 0.1, -0.05);
-        let mass: f64 = f.iter().sum();
-        assert!((mass - 1.5).abs() < 1e-14, "Mass not conserved: {mass}");
+    fn test_smagorinsky_eddy_viscosity_zero_strain() {
+        let smag = SmagorinskyModel::new(0.1);
+        let nu_t = smag.eddy_viscosity(0.0);
+        assert!((nu_t).abs() < 1e-14);
     }
 
     #[test]
-    fn test_equilibrium_momentum_conservation() {
-        let rho = 1.2;
-        let ux = 0.08;
-        let uy = -0.03;
-        let f = make_equilibrium_f(rho, ux, uy);
-        let (r, u, v) = macroscopic(&f);
-        assert!((r - rho).abs() < 1e-14);
-        assert!((u - ux).abs() < 1e-14);
-        assert!((v - uy).abs() < 1e-14);
+    fn test_smagorinsky_eddy_viscosity_positive_strain() {
+        let smag = SmagorinskyModel::new(0.15);
+        let strain = 0.05;
+        let nu_t = smag.eddy_viscosity(strain);
+        // νt = (0.15 * 1.0)^2 * 0.05 = 0.0225 * 0.05 = 0.001125
+        assert!((nu_t - 0.001125).abs() < 1e-10);
     }
 
     #[test]
-    fn test_strain_rate_zero_at_equilibrium() {
-        let f = make_equilibrium_f(1.0, 0.05, 0.0);
-        let feq = f;
-        let s = strain_rate_magnitude(&f, &feq, 0.8, 1.0);
-        assert!(s.abs() < 1e-14, "Strain rate should be 0 at equilibrium");
+    fn test_effective_tau_no_stress() {
+        let smag = SmagorinskyModel::new(0.1);
+        let tau0 = 0.8;
+        let tau_eff = smag.effective_tau(tau0, 0.0, 1.0);
+        // With zero stress: √(τ₀²) = τ₀, so τ_eff = 0.5*(τ₀+τ₀) = τ₀
+        assert!((tau_eff - tau0).abs() < 1e-14);
     }
 
     #[test]
-    fn test_smagorinsky_zero_viscosity_at_equilibrium() {
-        let smag = Smagorinsky::new(0.1, 0.6);
-        let f = make_equilibrium_f(1.0, 0.05, 0.0);
-        let feq = f;
-        let s = strain_rate_magnitude(&f, &feq, 0.6, 1.0);
-        let nu_t = smag.eddy_viscosity(s);
-        assert!(nu_t.abs() < 1e-14);
+    fn test_effective_tau_increases_with_stress() {
+        let smag = SmagorinskyModel::new(0.15);
+        let tau0 = 0.8;
+        let tau1 = smag.effective_tau(tau0, 0.01, 1.0);
+        let tau2 = smag.effective_tau(tau0, 0.1, 1.0);
+        assert!(tau1 > tau0);
+        assert!(tau2 > tau1);
     }
 
     #[test]
-    fn test_smagorinsky_collision_conserves_mass() {
-        let smag = Smagorinsky::new(0.15, 0.7);
-        let mut f = make_equilibrium_f(1.0, 0.1, 0.05);
-        // Perturb slightly
-        f[1] += 0.01;
-        f[3] -= 0.005;
-        f[5] -= 0.005;
-        let mass_before: f64 = f.iter().sum();
-        smag.collide(&mut f);
-        let mass_after: f64 = f.iter().sum();
-        assert!(
-            (mass_before - mass_after).abs() < 1e-13,
-            "Smagorinsky collision should conserve mass"
-        );
+    fn test_non_equilibrium_stress_at_equilibrium() {
+        let rho = 1.0;
+        let ux = 0.05;
+        let uy = 0.02;
+        let feq = Lattice2D::equilibrium(rho, ux, uy);
+        let fi = feq; // At equilibrium, fi == feq
+        let (pi_xx, pi_xy, pi_yy) = SmagorinskyModel::non_equilibrium_stress(&fi, &feq);
+        assert!(pi_xx.abs() < 1e-14);
+        assert!(pi_xy.abs() < 1e-14);
+        assert!(pi_yy.abs() < 1e-14);
     }
 
     #[test]
-    fn test_smagorinsky_effective_tau() {
-        let smag = Smagorinsky::new(0.15, 0.6);
-        let f = make_equilibrium_f(1.0, 0.0, 0.0);
-        let feq = f;
-        let tau_eff = smag.effective_tau(&f, &feq, 1.0);
-        assert!(
-            (tau_eff - 0.6).abs() < 1e-14,
-            "At equilibrium, effective tau should equal base tau"
-        );
+    fn test_stress_magnitude() {
+        let mag = SmagorinskyModel::stress_magnitude(3.0, 0.0, 4.0);
+        // √(9 + 0 + 16) = 5
+        assert!((mag - 5.0).abs() < 1e-14);
     }
 
     #[test]
-    fn test_wale_zero_for_uniform_flow() {
-        let wale = Wale::new(0.325, 0.6);
-        // Uniform flow: all gradients zero
-        let grad_u = [[0.0, 0.0], [0.0, 0.0]];
-        let nu_t = wale.eddy_viscosity(&grad_u);
-        assert!(nu_t.abs() < 1e-15);
+    fn test_effective_tau_at_equilibrium_lattice() {
+        let lat = Lattice2D::new(10, 10, 0.8, CollisionOperator::Bgk);
+        let smag = SmagorinskyModel::new(0.1);
+        let tau_eff = smag.effective_tau_at(&lat, 5, 5);
+        // At equilibrium, stress is ~0, so tau_eff ≈ tau0
+        assert!((tau_eff - 0.8).abs() < 1e-10);
     }
 
     #[test]
-    fn test_wale_zero_for_pure_shear() {
-        // WALE should give zero for laminar shear (linear velocity profile)
-        // du/dy = const, all other gradients zero → S^d should vanish
-        let wale = Wale::new(0.325, 0.6);
-        let grad_u = [[0.0, 0.1], [0.0, 0.0]]; // pure shear: du/dy = 0.1
-        let nu_t = wale.eddy_viscosity(&grad_u);
-        // For pure shear, g² has nonzero off-diag but S^d can be nonzero.
-        // Actually WALE is not exactly zero for pure shear in 2D, but it's small.
-        // The key property is that WALE → 0 near walls with proper y³ scaling.
-        assert!(nu_t >= 0.0, "WALE viscosity should be non-negative");
-    }
-
-    #[test]
-    fn test_wale_nonzero_for_complex_flow() {
-        let wale = Wale::new(0.325, 0.6);
-        let grad_u = [[0.1, 0.05], [-0.03, -0.1]]; // divergence-free
-        let nu_t = wale.eddy_viscosity(&grad_u);
-        assert!(nu_t > 0.0, "WALE should give nonzero viscosity for complex gradients");
-    }
-
-    #[test]
-    fn test_entropic_entropy_at_equilibrium() {
-        let f = make_equilibrium_f(1.0, 0.0, 0.0);
-        let h = EntropicLbm::entropy(&f);
-        // Should be finite and well-defined
-        assert!(h.is_finite());
-    }
-
-    #[test]
-    fn test_entropic_alpha_at_equilibrium() {
-        let f = make_equilibrium_f(1.0, 0.05, 0.0);
-        let feq = f;
-        let alpha = EntropicLbm::find_alpha(&f, &feq);
-        // At equilibrium, alpha can be anything since Δf = 0
-        assert!(alpha.is_finite());
-    }
-
-    #[test]
-    fn test_entropic_collision_conserves_mass() {
-        let elbm = EntropicLbm::new(0.7);
-        let mut f = make_equilibrium_f(1.0, 0.05, 0.0);
-        f[2] += 0.01;
-        f[4] -= 0.01;
-        let mass_before: f64 = f.iter().sum();
-        elbm.collide(&mut f);
-        let mass_after: f64 = f.iter().sum();
-        assert!(
-            (mass_before - mass_after).abs() < 1e-12,
-            "Entropic collision should conserve mass"
-        );
-    }
-
-    #[test]
-    fn test_regularized_at_equilibrium() {
-        let rlbm = RegularizedLbm::new(0.8);
-        let mut f = make_equilibrium_f(1.0, 0.1, -0.05);
-        let f_orig = f;
-        rlbm.collide(&mut f);
-        // At equilibrium, regularized should return to equilibrium
-        for i in 0..9 {
-            assert!(
-                (f[i] - f_orig[i]).abs() < 1e-13,
-                "Regularized should be identity at equilibrium, diff at {i}: {}",
-                (f[i] - f_orig[i]).abs()
-            );
+    fn test_eddy_viscosity_field_uniform() {
+        let lat = Lattice2D::new(10, 10, 0.8, CollisionOperator::Bgk);
+        let smag = SmagorinskyModel::new(0.1);
+        let nu_t = smag.eddy_viscosity_field(&lat);
+        // At equilibrium, eddy viscosity should be ~0 everywhere
+        for &v in &nu_t {
+            assert!(v.abs() < 1e-10);
         }
     }
 
     #[test]
-    fn test_regularized_conserves_mass() {
-        let rlbm = RegularizedLbm::new(0.7);
-        let mut f = make_equilibrium_f(1.0, 0.05, 0.02);
-        f[1] += 0.02;
-        f[3] -= 0.02;
-        let mass_before: f64 = f.iter().sum();
-        rlbm.collide(&mut f);
-        let mass_after: f64 = f.iter().sum();
-        assert!(
-            (mass_before - mass_after).abs() < 1e-13,
-            "Regularized should conserve mass"
-        );
-    }
-
-    #[test]
-    fn test_cumulant_at_equilibrium() {
-        let cum = CumulantCollision::new(0.8);
-        let mut f = make_equilibrium_f(1.0, 0.05, 0.0);
-        let f_orig = f;
-        cum.collide(&mut f);
-        let mass: f64 = f.iter().sum();
-        assert!((mass - 1.0).abs() < 1e-10, "Cumulant should conserve mass");
-    }
-
-    #[test]
-    fn test_cumulant_conserves_mass_perturbed() {
-        let cum = CumulantCollision::new(0.7);
-        let mut f = make_equilibrium_f(1.0, 0.05, 0.02);
-        f[1] += 0.01;
-        f[3] -= 0.01;
-        cum.collide(&mut f);
-        let mass: f64 = f.iter().sum();
-        assert!(
-            (mass - 1.0).abs() < 1e-10,
-            "Cumulant should conserve mass, got {mass}"
-        );
-    }
-
-    #[test]
-    fn test_bgk_collision_relaxes_to_equilibrium() {
-        let mut f = make_equilibrium_f(1.0, 0.1, 0.0);
-        f[1] += 0.05;
-        f[3] -= 0.05;
-        // After many collisions with tau=0.5 (omega=2), should converge to eq
-        // Actually tau=0.5 means omega=2 which overshoots. Use tau=1.0.
-        for _ in 0..100 {
-            bgk_collide(&mut f, 1.0);
+    fn test_q_criterion_uniform_flow() {
+        let lat = Lattice2D::new(10, 10, 0.8, CollisionOperator::Bgk);
+        let q = q_criterion_field(&lat);
+        // Uniform flow at rest → zero Q
+        for y in 1..9 {
+            for x in 1..9 {
+                assert!(q[y * 10 + x].abs() < 1e-14);
+            }
         }
-        let feq = make_equilibrium_f(1.0, 0.1, 0.0);
-        for i in 0..9 {
-            assert!(
-                (f[i] - feq[i]).abs() < 1e-10,
-                "BGK should relax to equilibrium"
-            );
+    }
+
+    #[test]
+    fn test_tke_zero_fluctuation() {
+        let ux = vec![0.1; 10];
+        let uy = vec![0.05; 10];
+        let tke = turbulent_kinetic_energy(&ux, &uy, &ux, &uy);
+        for &k in &tke {
+            assert!(k.abs() < 1e-14);
         }
+    }
+
+    #[test]
+    fn test_tke_with_fluctuations() {
+        let ux = vec![0.12, 0.08];
+        let uy = vec![0.06, 0.04];
+        let ux_mean = vec![0.1, 0.1];
+        let uy_mean = vec![0.05, 0.05];
+        let tke = turbulent_kinetic_energy(&ux, &uy, &ux_mean, &uy_mean);
+        // tke[0] = 0.5 * (0.02² + 0.01²) = 0.5 * 0.0005 = 0.00025
+        assert!((tke[0] - 0.00025).abs() < 1e-10);
+        // tke[1] = 0.5 * ((-0.02)² + (-0.01)²) = 0.00025
+        assert!((tke[1] - 0.00025).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_strain_rate_field_uniform() {
+        let lat = Lattice2D::new(10, 10, 0.8, CollisionOperator::Bgk);
+        let (s11, s12, s22) = strain_rate_field(&lat);
+        for y in 1..9 {
+            for x in 1..9 {
+                let idx = y * 10 + x;
+                assert!(s11[idx].abs() < 1e-14);
+                assert!(s12[idx].abs() < 1e-14);
+                assert!(s22[idx].abs() < 1e-14);
+            }
+        }
+    }
+
+    #[test]
+    fn test_colormap_jet_bounds() {
+        // Test at several points — ensure no panics and values are valid u8
+        for i in 0..=100 {
+            let t = i as f64 / 100.0;
+            let (r, g, b) = colormap_jet(t);
+            // Values are u8 so always in [0, 255]; just verify the function runs
+            let _ = (r, g, b);
+        }
+    }
+
+    #[test]
+    fn test_colormap_jet_blue_at_zero() {
+        let (r, g, b) = colormap_jet(0.0);
+        assert!(b > r, "Should be blue-ish at t=0: r={r}, g={g}, b={b}");
+    }
+
+    #[test]
+    fn test_colormap_jet_red_at_one() {
+        let (r, g, b) = colormap_jet(1.0);
+        assert!(r > b, "Should be red-ish at t=1: r={r}, g={g}, b={b}");
+    }
+
+    #[test]
+    fn test_write_ppm_jet() {
+        let dir = std::env::temp_dir().join("flux_test_jet");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test_jet.ppm");
+        let field: Vec<f64> = (0..64).map(|i| i as f64 / 63.0).collect();
+        write_ppm_jet(&path, 8, 8, &field).unwrap();
+        assert!(path.exists());
+        let data = std::fs::read(&path).unwrap();
+        // PPM header + 8*8*3 bytes
+        assert!(data.len() > 8 * 8 * 3);
+    }
+
+    #[test]
+    fn test_write_velocity_ppm_jet() {
+        let dir = std::env::temp_dir().join("flux_test_vel_jet");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vel_jet.ppm");
+        let ux = vec![0.1; 16];
+        let uy = vec![0.05; 16];
+        write_velocity_ppm_jet(&path, 4, 4, &ux, &uy).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn test_smagorinsky_with_delta() {
+        let smag = SmagorinskyModel::with_delta(0.1, 2.0);
+        let nu_t = smag.eddy_viscosity(0.1);
+        // νt = (0.1 * 2.0)^2 * 0.1 = 0.04 * 0.1 = 0.004
+        assert!((nu_t - 0.004).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_lattice_c_smag_field() {
+        // Test the existing c_smag integration in Lattice2D
+        let mut lat = Lattice2D::new(10, 10, 0.8, CollisionOperator::Bgk);
+        lat.c_smag = 0.15;
+        // Perturb and collide — should not panic
+        lat.set_equilibrium(5, 5, 1.1, 0.05, 0.02);
+        lat.collide_bgk();
+        // Verify density conservation
+        let rho = lat.density(5, 5);
+        assert!((rho - 1.1).abs() < 1e-10);
     }
 }

@@ -10,6 +10,14 @@ repository = "https://github.com/redbasecap-buiss/flux"
 keywords = ["cfd", "lattice-boltzmann", "fluid-dynamics", "simulation"]
 categories = ["science", "simulation"]
 
+[lib]
+name = "flux"
+path = "src/lib.rs"
+
+[[bin]]
+name = "flux"
+path = "src/main.rs"
+
 [dependencies]
 rayon = "1.10"
 clap = { version = "4", features = ["derive"] }

@@ -7,7 +7,7 @@
 //! - **Open**: Extrapolation outflow
 //! - **Moving wall**: For Couette flow etc.
 
-use crate::lattice::{Lattice2D, D2Q9_E, D2Q9_OPP, D2Q9_W, CS2};
+use crate::lattice::{Lattice2D, CS2, D2Q9_E, D2Q9_OPP, D2Q9_W};
 
 /// Boundary condition type
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -43,7 +43,11 @@ pub fn apply_bounce_back(lattice: &mut Lattice2D, edge: Edge) {
                 // Directions pointing into the domain (south-ward): 4, 7, 8
                 for &q in &[4, 7, 8] {
                     let opp = D2Q9_OPP[q];
-                    lattice.f[lattice.idx(q, x, y)] = lattice.f[lattice.idx(opp, x, y)];
+                    {
+                        let _si = lattice.idx(opp, x, y);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si];
+                    }
                 }
             }
         }
@@ -52,7 +56,11 @@ pub fn apply_bounce_back(lattice: &mut Lattice2D, edge: Edge) {
             for x in 0..nx {
                 for &q in &[2, 5, 6] {
                     let opp = D2Q9_OPP[q];
-                    lattice.f[lattice.idx(q, x, y)] = lattice.f[lattice.idx(opp, x, y)];
+                    {
+                        let _si = lattice.idx(opp, x, y);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si];
+                    }
                 }
             }
         }
@@ -61,7 +69,11 @@ pub fn apply_bounce_back(lattice: &mut Lattice2D, edge: Edge) {
             for y in 0..ny {
                 for &q in &[3, 6, 7] {
                     let opp = D2Q9_OPP[q];
-                    lattice.f[lattice.idx(q, x, y)] = lattice.f[lattice.idx(opp, x, y)];
+                    {
+                        let _si = lattice.idx(opp, x, y);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si];
+                    }
                 }
             }
         }
@@ -70,7 +82,11 @@ pub fn apply_bounce_back(lattice: &mut Lattice2D, edge: Edge) {
             for y in 0..ny {
                 for &q in &[1, 5, 8] {
                     let opp = D2Q9_OPP[q];
-                    lattice.f[lattice.idx(q, x, y)] = lattice.f[lattice.idx(opp, x, y)];
+                    {
+                        let _si = lattice.idx(opp, x, y);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si];
+                    }
                 }
             }
         }
@@ -92,10 +108,12 @@ pub fn apply_moving_wall(lattice: &mut Lattice2D, edge: Edge, wall_ux: f64, wall
                 let rho = lattice.density(x, y);
                 for &q in &[4, 7, 8] {
                     let opp = D2Q9_OPP[q];
-                    let eu_wall =
-                        D2Q9_E[opp].0 as f64 * wall_ux + D2Q9_E[opp].1 as f64 * wall_uy;
-                    lattice.f[lattice.idx(q, x, y)] =
-                        lattice.f[lattice.idx(opp, x, y)] - 2.0 * D2Q9_W[opp] * rho * eu_wall / CS2;
+                    let eu_wall = D2Q9_E[opp].0 as f64 * wall_ux + D2Q9_E[opp].1 as f64 * wall_uy;
+                    {
+                        let _si = lattice.idx(opp, x, y);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si] - 2.0 * D2Q9_W[opp] * rho * eu_wall / CS2;
+                    }
                 }
             }
         }
@@ -105,10 +123,12 @@ pub fn apply_moving_wall(lattice: &mut Lattice2D, edge: Edge, wall_ux: f64, wall
                 let rho = lattice.density(x, y);
                 for &q in &[2, 5, 6] {
                     let opp = D2Q9_OPP[q];
-                    let eu_wall =
-                        D2Q9_E[opp].0 as f64 * wall_ux + D2Q9_E[opp].1 as f64 * wall_uy;
-                    lattice.f[lattice.idx(q, x, y)] =
-                        lattice.f[lattice.idx(opp, x, y)] - 2.0 * D2Q9_W[opp] * rho * eu_wall / CS2;
+                    let eu_wall = D2Q9_E[opp].0 as f64 * wall_ux + D2Q9_E[opp].1 as f64 * wall_uy;
+                    {
+                        let _si = lattice.idx(opp, x, y);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si] - 2.0 * D2Q9_W[opp] * rho * eu_wall / CS2;
+                    }
                 }
             }
         }
@@ -118,10 +138,12 @@ pub fn apply_moving_wall(lattice: &mut Lattice2D, edge: Edge, wall_ux: f64, wall
                 let rho = lattice.density(x, y);
                 for &q in &[3, 6, 7] {
                     let opp = D2Q9_OPP[q];
-                    let eu_wall =
-                        D2Q9_E[opp].0 as f64 * wall_ux + D2Q9_E[opp].1 as f64 * wall_uy;
-                    lattice.f[lattice.idx(q, x, y)] =
-                        lattice.f[lattice.idx(opp, x, y)] - 2.0 * D2Q9_W[opp] * rho * eu_wall / CS2;
+                    let eu_wall = D2Q9_E[opp].0 as f64 * wall_ux + D2Q9_E[opp].1 as f64 * wall_uy;
+                    {
+                        let _si = lattice.idx(opp, x, y);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si] - 2.0 * D2Q9_W[opp] * rho * eu_wall / CS2;
+                    }
                 }
             }
         }
@@ -131,10 +153,12 @@ pub fn apply_moving_wall(lattice: &mut Lattice2D, edge: Edge, wall_ux: f64, wall
                 let rho = lattice.density(x, y);
                 for &q in &[1, 5, 8] {
                     let opp = D2Q9_OPP[q];
-                    let eu_wall =
-                        D2Q9_E[opp].0 as f64 * wall_ux + D2Q9_E[opp].1 as f64 * wall_uy;
-                    lattice.f[lattice.idx(q, x, y)] =
-                        lattice.f[lattice.idx(opp, x, y)] - 2.0 * D2Q9_W[opp] * rho * eu_wall / CS2;
+                    let eu_wall = D2Q9_E[opp].0 as f64 * wall_ux + D2Q9_E[opp].1 as f64 * wall_uy;
+                    {
+                        let _si = lattice.idx(opp, x, y);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si] - 2.0 * D2Q9_W[opp] * rho * eu_wall / CS2;
+                    }
                 }
             }
         }
@@ -154,12 +178,30 @@ pub fn apply_zou_he_velocity(lattice: &mut Lattice2D, edge: Edge, ux: f64, uy: f
         Edge::West => {
             let x = 0;
             for y in 1..ny - 1 {
-                let f0 = lattice.f[lattice.idx(0, x, y)];
-                let f2 = lattice.f[lattice.idx(2, x, y)];
-                let f3 = lattice.f[lattice.idx(3, x, y)];
-                let f4 = lattice.f[lattice.idx(4, x, y)];
-                let f6 = lattice.f[lattice.idx(6, x, y)];
-                let f7 = lattice.f[lattice.idx(7, x, y)];
+                let f0 = {
+                    let _i = lattice.idx(0, x, y);
+                    lattice.f[_i]
+                };
+                let f2 = {
+                    let _i = lattice.idx(2, x, y);
+                    lattice.f[_i]
+                };
+                let f3 = {
+                    let _i = lattice.idx(3, x, y);
+                    lattice.f[_i]
+                };
+                let f4 = {
+                    let _i = lattice.idx(4, x, y);
+                    lattice.f[_i]
+                };
+                let f6 = {
+                    let _i = lattice.idx(6, x, y);
+                    lattice.f[_i]
+                };
+                let f7 = {
+                    let _i = lattice.idx(7, x, y);
+                    lattice.f[_i]
+                };
 
                 let rho = (f0 + f2 + f4 + 2.0 * (f3 + f6 + f7)) / (1.0 - ux);
 
@@ -167,20 +209,47 @@ pub fn apply_zou_he_velocity(lattice: &mut Lattice2D, edge: Edge, ux: f64, uy: f
                 let f5 = f7 - 0.5 * (f2 - f4) + rho * ux / 6.0 + rho * uy / 2.0;
                 let f8 = f6 + 0.5 * (f2 - f4) + rho * ux / 6.0 - rho * uy / 2.0;
 
-                lattice.f[lattice.idx(1, x, y)] = f1;
-                lattice.f[lattice.idx(5, x, y)] = f5;
-                lattice.f[lattice.idx(8, x, y)] = f8;
+                {
+                    let _i = lattice.idx(1, x, y);
+                    lattice.f[_i] = f1;
+                }
+                {
+                    let _i = lattice.idx(5, x, y);
+                    lattice.f[_i] = f5;
+                }
+                {
+                    let _i = lattice.idx(8, x, y);
+                    lattice.f[_i] = f8;
+                }
             }
         }
         Edge::East => {
             let x = nx - 1;
             for y in 1..ny - 1 {
-                let f0 = lattice.f[lattice.idx(0, x, y)];
-                let f1 = lattice.f[lattice.idx(1, x, y)];
-                let f2 = lattice.f[lattice.idx(2, x, y)];
-                let f4 = lattice.f[lattice.idx(4, x, y)];
-                let f5 = lattice.f[lattice.idx(5, x, y)];
-                let f8 = lattice.f[lattice.idx(8, x, y)];
+                let f0 = {
+                    let _i = lattice.idx(0, x, y);
+                    lattice.f[_i]
+                };
+                let f1 = {
+                    let _i = lattice.idx(1, x, y);
+                    lattice.f[_i]
+                };
+                let f2 = {
+                    let _i = lattice.idx(2, x, y);
+                    lattice.f[_i]
+                };
+                let f4 = {
+                    let _i = lattice.idx(4, x, y);
+                    lattice.f[_i]
+                };
+                let f5 = {
+                    let _i = lattice.idx(5, x, y);
+                    lattice.f[_i]
+                };
+                let f8 = {
+                    let _i = lattice.idx(8, x, y);
+                    lattice.f[_i]
+                };
 
                 let rho = (f0 + f2 + f4 + 2.0 * (f1 + f5 + f8)) / (1.0 + ux);
 
@@ -188,20 +257,47 @@ pub fn apply_zou_he_velocity(lattice: &mut Lattice2D, edge: Edge, ux: f64, uy: f
                 let f7 = f5 + 0.5 * (f2 - f4) - rho * ux / 6.0 - rho * uy / 2.0;
                 let f6 = f8 - 0.5 * (f2 - f4) - rho * ux / 6.0 + rho * uy / 2.0;
 
-                lattice.f[lattice.idx(3, x, y)] = f3;
-                lattice.f[lattice.idx(7, x, y)] = f7;
-                lattice.f[lattice.idx(6, x, y)] = f6;
+                {
+                    let _i = lattice.idx(3, x, y);
+                    lattice.f[_i] = f3;
+                }
+                {
+                    let _i = lattice.idx(7, x, y);
+                    lattice.f[_i] = f7;
+                }
+                {
+                    let _i = lattice.idx(6, x, y);
+                    lattice.f[_i] = f6;
+                }
             }
         }
         Edge::South => {
             let y = 0;
             for x in 1..nx - 1 {
-                let f0 = lattice.f[lattice.idx(0, x, y)];
-                let f1 = lattice.f[lattice.idx(1, x, y)];
-                let f3 = lattice.f[lattice.idx(3, x, y)];
-                let f4 = lattice.f[lattice.idx(4, x, y)];
-                let f7 = lattice.f[lattice.idx(7, x, y)];
-                let f8 = lattice.f[lattice.idx(8, x, y)];
+                let f0 = {
+                    let _i = lattice.idx(0, x, y);
+                    lattice.f[_i]
+                };
+                let f1 = {
+                    let _i = lattice.idx(1, x, y);
+                    lattice.f[_i]
+                };
+                let f3 = {
+                    let _i = lattice.idx(3, x, y);
+                    lattice.f[_i]
+                };
+                let f4 = {
+                    let _i = lattice.idx(4, x, y);
+                    lattice.f[_i]
+                };
+                let f7 = {
+                    let _i = lattice.idx(7, x, y);
+                    lattice.f[_i]
+                };
+                let f8 = {
+                    let _i = lattice.idx(8, x, y);
+                    lattice.f[_i]
+                };
 
                 let rho = (f0 + f1 + f3 + 2.0 * (f4 + f7 + f8)) / (1.0 - uy);
 
@@ -209,20 +305,47 @@ pub fn apply_zou_he_velocity(lattice: &mut Lattice2D, edge: Edge, ux: f64, uy: f
                 let f5 = f7 - 0.5 * (f1 - f3) + rho * uy / 6.0 + rho * ux / 2.0;
                 let f6 = f8 + 0.5 * (f1 - f3) + rho * uy / 6.0 - rho * ux / 2.0;
 
-                lattice.f[lattice.idx(2, x, y)] = f2;
-                lattice.f[lattice.idx(5, x, y)] = f5;
-                lattice.f[lattice.idx(6, x, y)] = f6;
+                {
+                    let _i = lattice.idx(2, x, y);
+                    lattice.f[_i] = f2;
+                }
+                {
+                    let _i = lattice.idx(5, x, y);
+                    lattice.f[_i] = f5;
+                }
+                {
+                    let _i = lattice.idx(6, x, y);
+                    lattice.f[_i] = f6;
+                }
             }
         }
         Edge::North => {
             let y = ny - 1;
             for x in 1..nx - 1 {
-                let f0 = lattice.f[lattice.idx(0, x, y)];
-                let f1 = lattice.f[lattice.idx(1, x, y)];
-                let f2 = lattice.f[lattice.idx(2, x, y)];
-                let f3 = lattice.f[lattice.idx(3, x, y)];
-                let f5 = lattice.f[lattice.idx(5, x, y)];
-                let f6 = lattice.f[lattice.idx(6, x, y)];
+                let f0 = {
+                    let _i = lattice.idx(0, x, y);
+                    lattice.f[_i]
+                };
+                let f1 = {
+                    let _i = lattice.idx(1, x, y);
+                    lattice.f[_i]
+                };
+                let f2 = {
+                    let _i = lattice.idx(2, x, y);
+                    lattice.f[_i]
+                };
+                let f3 = {
+                    let _i = lattice.idx(3, x, y);
+                    lattice.f[_i]
+                };
+                let f5 = {
+                    let _i = lattice.idx(5, x, y);
+                    lattice.f[_i]
+                };
+                let f6 = {
+                    let _i = lattice.idx(6, x, y);
+                    lattice.f[_i]
+                };
 
                 let rho = (f0 + f1 + f3 + 2.0 * (f2 + f5 + f6)) / (1.0 + uy);
 
@@ -230,9 +353,18 @@ pub fn apply_zou_he_velocity(lattice: &mut Lattice2D, edge: Edge, ux: f64, uy: f
                 let f7 = f5 + 0.5 * (f1 - f3) - rho * uy / 6.0 - rho * ux / 2.0;
                 let f8 = f6 - 0.5 * (f1 - f3) - rho * uy / 6.0 + rho * ux / 2.0;
 
-                lattice.f[lattice.idx(4, x, y)] = f4;
-                lattice.f[lattice.idx(7, x, y)] = f7;
-                lattice.f[lattice.idx(8, x, y)] = f8;
+                {
+                    let _i = lattice.idx(4, x, y);
+                    lattice.f[_i] = f4;
+                }
+                {
+                    let _i = lattice.idx(7, x, y);
+                    lattice.f[_i] = f7;
+                }
+                {
+                    let _i = lattice.idx(8, x, y);
+                    lattice.f[_i] = f8;
+                }
             }
         }
     }
@@ -248,12 +380,30 @@ pub fn apply_zou_he_pressure(lattice: &mut Lattice2D, edge: Edge, rho_target: f6
         Edge::East => {
             let x = nx - 1;
             for y in 1..ny - 1 {
-                let f0 = lattice.f[lattice.idx(0, x, y)];
-                let f1 = lattice.f[lattice.idx(1, x, y)];
-                let f2 = lattice.f[lattice.idx(2, x, y)];
-                let f4 = lattice.f[lattice.idx(4, x, y)];
-                let f5 = lattice.f[lattice.idx(5, x, y)];
-                let f8 = lattice.f[lattice.idx(8, x, y)];
+                let f0 = {
+                    let _i = lattice.idx(0, x, y);
+                    lattice.f[_i]
+                };
+                let f1 = {
+                    let _i = lattice.idx(1, x, y);
+                    lattice.f[_i]
+                };
+                let f2 = {
+                    let _i = lattice.idx(2, x, y);
+                    lattice.f[_i]
+                };
+                let f4 = {
+                    let _i = lattice.idx(4, x, y);
+                    lattice.f[_i]
+                };
+                let f5 = {
+                    let _i = lattice.idx(5, x, y);
+                    lattice.f[_i]
+                };
+                let f8 = {
+                    let _i = lattice.idx(8, x, y);
+                    lattice.f[_i]
+                };
 
                 let ux = 1.0 - (f0 + f2 + f4 + 2.0 * (f1 + f5 + f8)) / rho_target;
 
@@ -261,20 +411,47 @@ pub fn apply_zou_he_pressure(lattice: &mut Lattice2D, edge: Edge, rho_target: f6
                 let f7 = f5 + 0.5 * (f2 - f4) - rho_target * ux / 6.0;
                 let f6 = f8 - 0.5 * (f2 - f4) - rho_target * ux / 6.0;
 
-                lattice.f[lattice.idx(3, x, y)] = f3;
-                lattice.f[lattice.idx(7, x, y)] = f7;
-                lattice.f[lattice.idx(6, x, y)] = f6;
+                {
+                    let _i = lattice.idx(3, x, y);
+                    lattice.f[_i] = f3;
+                }
+                {
+                    let _i = lattice.idx(7, x, y);
+                    lattice.f[_i] = f7;
+                }
+                {
+                    let _i = lattice.idx(6, x, y);
+                    lattice.f[_i] = f6;
+                }
             }
         }
         Edge::West => {
             let x = 0;
             for y in 1..ny - 1 {
-                let f0 = lattice.f[lattice.idx(0, x, y)];
-                let f2 = lattice.f[lattice.idx(2, x, y)];
-                let f3 = lattice.f[lattice.idx(3, x, y)];
-                let f4 = lattice.f[lattice.idx(4, x, y)];
-                let f6 = lattice.f[lattice.idx(6, x, y)];
-                let f7 = lattice.f[lattice.idx(7, x, y)];
+                let f0 = {
+                    let _i = lattice.idx(0, x, y);
+                    lattice.f[_i]
+                };
+                let f2 = {
+                    let _i = lattice.idx(2, x, y);
+                    lattice.f[_i]
+                };
+                let f3 = {
+                    let _i = lattice.idx(3, x, y);
+                    lattice.f[_i]
+                };
+                let f4 = {
+                    let _i = lattice.idx(4, x, y);
+                    lattice.f[_i]
+                };
+                let f6 = {
+                    let _i = lattice.idx(6, x, y);
+                    lattice.f[_i]
+                };
+                let f7 = {
+                    let _i = lattice.idx(7, x, y);
+                    lattice.f[_i]
+                };
 
                 let ux = -1.0 + (f0 + f2 + f4 + 2.0 * (f3 + f6 + f7)) / rho_target;
 
@@ -282,9 +459,18 @@ pub fn apply_zou_he_pressure(lattice: &mut Lattice2D, edge: Edge, rho_target: f6
                 let f5 = f7 - 0.5 * (f2 - f4) + rho_target * ux / 6.0;
                 let f8 = f6 + 0.5 * (f2 - f4) + rho_target * ux / 6.0;
 
-                lattice.f[lattice.idx(1, x, y)] = f1;
-                lattice.f[lattice.idx(5, x, y)] = f5;
-                lattice.f[lattice.idx(8, x, y)] = f8;
+                {
+                    let _i = lattice.idx(1, x, y);
+                    lattice.f[_i] = f1;
+                }
+                {
+                    let _i = lattice.idx(5, x, y);
+                    lattice.f[_i] = f5;
+                }
+                {
+                    let _i = lattice.idx(8, x, y);
+                    lattice.f[_i] = f8;
+                }
             }
         }
         _ => {
@@ -306,7 +492,11 @@ pub fn apply_open_boundary(lattice: &mut Lattice2D, edge: Edge) {
             let x = nx - 1;
             for y in 0..ny {
                 for q in 0..9 {
-                    lattice.f[lattice.idx(q, x, y)] = lattice.f[lattice.idx(q, x - 1, y)];
+                    {
+                        let _si = lattice.idx(q, x - 1, y);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si];
+                    }
                 }
             }
         }
@@ -314,7 +504,11 @@ pub fn apply_open_boundary(lattice: &mut Lattice2D, edge: Edge) {
             let x = 0;
             for y in 0..ny {
                 for q in 0..9 {
-                    lattice.f[lattice.idx(q, x, y)] = lattice.f[lattice.idx(q, x + 1, y)];
+                    {
+                        let _si = lattice.idx(q, x + 1, y);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si];
+                    }
                 }
             }
         }
@@ -322,7 +516,11 @@ pub fn apply_open_boundary(lattice: &mut Lattice2D, edge: Edge) {
             let y = ny - 1;
             for x in 0..nx {
                 for q in 0..9 {
-                    lattice.f[lattice.idx(q, x, y)] = lattice.f[lattice.idx(q, x, y - 1)];
+                    {
+                        let _si = lattice.idx(q, x, y - 1);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si];
+                    }
                 }
             }
         }
@@ -330,7 +528,11 @@ pub fn apply_open_boundary(lattice: &mut Lattice2D, edge: Edge) {
             let y = 0;
             for x in 0..nx {
                 for q in 0..9 {
-                    lattice.f[lattice.idx(q, x, y)] = lattice.f[lattice.idx(q, x, y + 1)];
+                    {
+                        let _si = lattice.idx(q, x, y + 1);
+                        let _di = lattice.idx(q, x, y);
+                        lattice.f[_di] = lattice.f[_si];
+                    }
                 }
             }
         }
@@ -416,15 +618,14 @@ mod tests {
         let wall_ux = 0.1;
 
         // Store populations before
-        let f4_before = lat.f[lat.idx(4, 5, 9)];
+        let f7_before = lat.f[lat.idx(7, 5, 9)];
 
         apply_moving_wall(&mut lat, Edge::North, wall_ux, 0.0);
 
-        // Moving wall should modify populations
-        let f4_after = lat.f[lat.idx(4, 5, 9)];
-        // The difference should depend on wall velocity
+        // Moving wall should modify populations — q=7 (opp=5) has e5=(1,1), eu_wall = 0.1*1 + 0*1 = 0.1 ≠ 0
+        let f7_after = lat.f[lat.idx(7, 5, 9)];
         assert!(
-            (f4_after - f4_before).abs() > 1e-10,
+            (f7_after - f7_before).abs() > 1e-10,
             "Moving wall should change populations"
         );
     }

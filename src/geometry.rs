@@ -126,7 +126,7 @@ impl Geometry2D {
 
     /// Count solid nodes
     pub fn solid_count(&self) -> usize {
-        self.solid.iter().filter(|&&s| *s).count()
+        self.solid.iter().filter(|s| **s).count()
     }
 }
 
@@ -190,8 +190,7 @@ impl Geometry3D {
         }
 
         // Binary STL: 80 byte header + 4 byte triangle count
-        let num_triangles =
-            u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
+        let num_triangles = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
         let expected_size = 84 + num_triangles * 50;
         if data.len() < expected_size {
             return Err(format!(
@@ -210,20 +209,13 @@ impl Geometry3D {
                 let x = f32::from_le_bytes([data[vo], data[vo + 1], data[vo + 2], data[vo + 3]])
                     as f64
                     * scale;
-                let y = f32::from_le_bytes([
-                    data[vo + 4],
-                    data[vo + 5],
-                    data[vo + 6],
-                    data[vo + 7],
-                ]) as f64
+                let y = f32::from_le_bytes([data[vo + 4], data[vo + 5], data[vo + 6], data[vo + 7]])
+                    as f64
                     * scale;
-                let z = f32::from_le_bytes([
-                    data[vo + 8],
-                    data[vo + 9],
-                    data[vo + 10],
-                    data[vo + 11],
-                ]) as f64
-                    * scale;
+                let z =
+                    f32::from_le_bytes([data[vo + 8], data[vo + 9], data[vo + 10], data[vo + 11]])
+                        as f64
+                        * scale;
                 vertices[v] = (x, y, z);
             }
 
