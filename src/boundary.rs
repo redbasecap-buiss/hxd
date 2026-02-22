@@ -573,7 +573,7 @@ mod tests {
         let mut lat = Lattice2D::new(10, 10, 1.0, CollisionOperator::Bgk);
         lat.set_equilibrium(5, 0, 1.0, 0.0, 0.1);
 
-        let f2_before = lat.f[lat.idx(2, 5, 0)]; // north
+        let _f2_before = lat.f[lat.idx(2, 5, 0)]; // north
         apply_bounce_back(&mut lat, Edge::South);
         let f2_after = lat.f[lat.idx(2, 5, 0)]; // should now equal old f4
 
