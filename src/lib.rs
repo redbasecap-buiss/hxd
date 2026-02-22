@@ -12,9 +12,11 @@
 pub mod boundary;
 pub mod geometry;
 pub mod lattice;
+pub mod multiphase;
 pub mod output;
 pub mod parallel;
 pub mod physics;
 pub mod solver;
+pub mod thermal;
 pub mod turbulence;
 pub mod validation;

@@ -162,6 +162,26 @@ src/
 3. **Zou, Q. & He, X.** (1997). On pressure and velocity boundary conditions for the lattice Boltzmann BGK model. *Physics of Fluids*, 9(6), 1591-1598.
 4. **Lallemand, P. & Luo, L.-S.** (2000). Theory of the lattice Boltzmann method: Dispersion, dissipation, isotropy, Galilean invariance, and stability. *Physical Review E*, 61(6), 6546.
 
+## Python Visualization Examples
+
+The `examples/` directory includes Python scripts that demonstrate LBM concepts with beautiful visualizations:
+
+### `vortex_street.py` — von Kármán Vortex Street
+- **Flow around a cylinder** with spectacular vortex shedding
+- **D2Q9 implementation** from scratch (educational)
+- **High-quality MP4 output** with vorticity visualization
+- Run: `python3 examples/vortex_street.py`
+
+### `lid_cavity.py` — Lid-Driven Cavity Flow  
+- **Classical CFD benchmark** (Ghia et al. 1982)
+- **Velocity magnitude + streamlines** visualization
+- **Moving wall boundary conditions**
+- Run: `python3 examples/lid_cavity.py`
+
+**Requirements:** `pip3 install numpy matplotlib`
+
+These complement the high-performance Rust solver with educational Python implementations perfect for learning LBM theory and creating publication-quality visualizations.
+
 ## License
 
 MIT

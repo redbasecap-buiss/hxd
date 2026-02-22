@@ -106,6 +106,10 @@ pub const D3Q19_OPP: [usize; 19] = [
 pub enum CollisionOperator {
     Bgk,
     Mrt,
+    /// Two-Relaxation-Time: uses symmetric (τ+) and antisymmetric (τ-) relaxation.
+    /// τ+ controls viscosity, τ- is a free parameter for stability.
+    /// Magic parameter Λ = (τ+ - 0.5)(τ- - 0.5) ≈ 1/4 gives wall-location independence.
+    Trt,
 }
 
 // ── D2Q9 Lattice ────────────────────────────────────────────────────────────
@@ -423,11 +427,85 @@ impl Lattice2D {
         }
     }
 
+    /// TRT collision operator: Two-Relaxation-Time.
+    ///
+    /// Decomposes distributions into symmetric and antisymmetric parts:
+    ///   f_i^+ = (f_i + f_ī) / 2,  f_i^- = (f_i - f_ī) / 2
+    /// and relaxes each with its own rate:
+    ///   f_i* = f_i - (f_i^+ - f_i^{eq+}) / τ+ - (f_i^- - f_i^{eq-}) / τ-
+    ///
+    /// τ+ = τ (controls viscosity), τ- chosen via magic parameter Λ:
+    ///   Λ = (τ+ - 0.5)(τ- - 0.5)
+    /// Λ = 1/4 gives exact wall location for bounce-back (recommended).
+    ///
+    /// Reference: Ginzburg, I. (2005). "Equilibrium-type and link-type lattice Boltzmann models
+    /// for generic advection and anisotropic-dispersion equation."
+    pub fn collide_trt(&mut self) {
+        let nx = self.nx;
+        let ny = self.ny;
+        let tau_plus = self.tau;
+        let omega_plus = 1.0 / tau_plus;
+        // Magic parameter Λ = 1/4 for wall-location independence
+        let lambda = 0.25;
+        let tau_minus = 0.5 + lambda / (tau_plus - 0.5);
+        let omega_minus = 1.0 / tau_minus;
+        let f = &mut self.f;
+
+        let row_data: Vec<(usize, Vec<f64>)> = (0..ny)
+            .into_par_iter()
+            .map(|y| {
+                let mut row_f = vec![0.0; 9 * nx];
+                for x in 0..nx {
+                    let mut rho = 0.0;
+                    let mut ux = 0.0;
+                    let mut uy = 0.0;
+                    let mut fi = [0.0; 9];
+                    for q in 0..9 {
+                        let val = f[q * nx * ny + y * nx + x];
+                        fi[q] = val;
+                        rho += val;
+                        ux += val * D2Q9_E[q].0 as f64;
+                        uy += val * D2Q9_E[q].1 as f64;
+                    }
+                    if rho > 1e-15 {
+                        ux /= rho;
+                        uy /= rho;
+                    }
+
+                    let feq = Self::equilibrium(rho, ux, uy);
+
+                    for q in 0..9 {
+                        let qbar = D2Q9_OPP[q];
+                        // Symmetric and antisymmetric parts
+                        let f_plus = 0.5 * (fi[q] + fi[qbar]);
+                        let f_minus = 0.5 * (fi[q] - fi[qbar]);
+                        let feq_plus = 0.5 * (feq[q] + feq[qbar]);
+                        let feq_minus = 0.5 * (feq[q] - feq[qbar]);
+
+                        row_f[q * nx + x] = fi[q]
+                            - omega_plus * (f_plus - feq_plus)
+                            - omega_minus * (f_minus - feq_minus);
+                    }
+                }
+                (y, row_f)
+            })
+            .collect();
+
+        for (y, row_f) in row_data {
+            for x in 0..nx {
+                for q in 0..9 {
+                    f[q * nx * ny + y * nx + x] = row_f[q * nx + x];
+                }
+            }
+        }
+    }
+
     /// Perform collision step based on configured operator
     pub fn collide(&mut self) {
         match self.collision {
             CollisionOperator::Bgk => self.collide_bgk(),
             CollisionOperator::Mrt => self.collide_mrt(),
+            CollisionOperator::Trt => self.collide_trt(),
         }
     }
 
@@ -822,6 +900,52 @@ mod tests {
             (rho_before - rho_after).abs() < 1e-14,
             "BGK doesn't conserve mass"
         );
+    }
+
+    #[test]
+    fn test_trt_collision_preserves_mass() {
+        let mut lat = Lattice2D::new(5, 5, 0.8, CollisionOperator::Trt);
+        lat.set_equilibrium(2, 2, 1.1, 0.05, 0.02);
+        let rho_before = lat.density(2, 2);
+        lat.collide_trt();
+        let rho_after = lat.density(2, 2);
+        assert!(
+            (rho_before - rho_after).abs() < 1e-14,
+            "TRT doesn't conserve mass: before={rho_before}, after={rho_after}"
+        );
+    }
+
+    #[test]
+    fn test_trt_collision_preserves_momentum() {
+        let mut lat = Lattice2D::new(5, 5, 0.8, CollisionOperator::Trt);
+        lat.set_equilibrium(2, 2, 1.1, 0.05, 0.02);
+        let (ux_before, uy_before) = lat.velocity(2, 2);
+        lat.collide_trt();
+        let (ux_after, uy_after) = lat.velocity(2, 2);
+        assert!(
+            (ux_before - ux_after).abs() < 1e-14,
+            "TRT doesn't conserve x-momentum"
+        );
+        assert!(
+            (uy_before - uy_after).abs() < 1e-14,
+            "TRT doesn't conserve y-momentum"
+        );
+    }
+
+    #[test]
+    fn test_trt_reduces_to_bgk_at_equilibrium() {
+        // At equilibrium, TRT and BGK should produce identical results
+        let mut lat_bgk = Lattice2D::new(5, 5, 0.8, CollisionOperator::Bgk);
+        let mut lat_trt = Lattice2D::new(5, 5, 0.8, CollisionOperator::Trt);
+        // Both start at equilibrium (ρ=1, u=0), so collision is a no-op
+        lat_bgk.collide();
+        lat_trt.collide();
+        for i in 0..lat_bgk.f.len() {
+            assert!(
+                (lat_bgk.f[i] - lat_trt.f[i]).abs() < 1e-14,
+                "TRT and BGK differ at equilibrium at index {i}"
+            );
+        }
     }
 
     #[test]
