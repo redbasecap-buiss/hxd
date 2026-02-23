@@ -100,6 +100,61 @@ pub const D3Q19_OPP: [usize; 19] = [
 
 // ── Collision Type ──────────────────────────────────────────────────────────
 
+// ── D3Q27 Constants ─────────────────────────────────────────────────────────
+
+/// D3Q27 discrete velocity vectors (x, y, z)
+pub const D3Q27_E: [(i32, i32, i32); 27] = [
+    (0, 0, 0),    // 0: rest
+    (1, 0, 0),    // 1
+    (-1, 0, 0),   // 2
+    (0, 1, 0),    // 3
+    (0, -1, 0),   // 4
+    (0, 0, 1),    // 5
+    (0, 0, -1),   // 6
+    (1, 1, 0),    // 7
+    (-1, 1, 0),   // 8
+    (1, -1, 0),   // 9
+    (-1, -1, 0),  // 10
+    (1, 0, 1),    // 11
+    (-1, 0, 1),   // 12
+    (1, 0, -1),   // 13
+    (-1, 0, -1),  // 14
+    (0, 1, 1),    // 15
+    (0, -1, 1),   // 16
+    (0, 1, -1),   // 17
+    (0, -1, -1),  // 18
+    (1, 1, 1),    // 19
+    (-1, 1, 1),   // 20
+    (1, -1, 1),   // 21
+    (-1, -1, 1),  // 22
+    (1, 1, -1),   // 23
+    (-1, 1, -1),  // 24
+    (1, -1, -1),  // 25
+    (-1, -1, -1), // 26
+];
+
+/// D3Q27 weights: w_0 = 8/27, w_{1..6} = 2/27, w_{7..18} = 1/54, w_{19..26} = 1/216
+pub const D3Q27_W: [f64; 27] = [
+    8.0 / 27.0,  // rest
+    2.0 / 27.0, 2.0 / 27.0, 2.0 / 27.0, 2.0 / 27.0, 2.0 / 27.0, 2.0 / 27.0, // axis
+    1.0 / 54.0, 1.0 / 54.0, 1.0 / 54.0, 1.0 / 54.0, // edge xy
+    1.0 / 54.0, 1.0 / 54.0, 1.0 / 54.0, 1.0 / 54.0, // edge xz
+    1.0 / 54.0, 1.0 / 54.0, 1.0 / 54.0, 1.0 / 54.0, // edge yz
+    1.0 / 216.0, 1.0 / 216.0, 1.0 / 216.0, 1.0 / 216.0, // corner +z
+    1.0 / 216.0, 1.0 / 216.0, 1.0 / 216.0, 1.0 / 216.0, // corner -z
+];
+
+/// D3Q27 opposite direction indices
+pub const D3Q27_OPP: [usize; 27] = [
+    0,  2,  1,  4,  3,  6,  5,   // rest, axis
+    10, 9,  8,  7,               // edge xy
+    14, 13, 12, 11,              // edge xz
+    18, 17, 16, 15,              // edge yz
+    26, 25, 24, 23, 22, 21, 20, 19, // corners
+];
+
+// ── Collision Type ──────────────────────────────────────────────────────────
+
 /// Collision operator selection
 #[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -110,6 +165,11 @@ pub enum CollisionOperator {
     /// τ+ controls viscosity, τ- is a free parameter for stability.
     /// Magic parameter Λ = (τ+ - 0.5)(τ- - 0.5) ≈ 1/4 gives wall-location independence.
     Trt,
+    /// Cumulant collision: relaxation in cumulant space.
+    /// State-of-the-art operator with Galilean invariance and adjustable bulk viscosity.
+    /// Reference: Geier et al. (2015). "The cumulant lattice Boltzmann equation in three
+    /// dimensions: Theory and validation."
+    Cumulant,
 }
 
 // ── D2Q9 Lattice ────────────────────────────────────────────────────────────
@@ -500,12 +560,196 @@ impl Lattice2D {
         }
     }
 
+    /// Cumulant collision operator for D2Q9.
+    ///
+    /// Transforms populations to central moments, then to cumulants,
+    /// relaxes cumulants, and transforms back. Provides Galilean invariance
+    /// and tunable bulk viscosity.
+    ///
+    /// Reference: Geier, M. et al. (2006). "Cascaded digital lattice Boltzmann
+    /// automata for high Reynolds number flow." Physical Review E, 73(6).
+    pub fn collide_cumulant(&mut self) {
+        let nx = self.nx;
+        let ny = self.ny;
+        let tau = self.tau;
+        let omega = 1.0 / tau;
+        // Bulk viscosity relaxation rate (can be tuned; here = shear rate for simplicity)
+        let omega_bulk = omega;
+        let f = &mut self.f;
+
+        let row_data: Vec<(usize, Vec<f64>)> = (0..ny)
+            .into_par_iter()
+            .map(|y| {
+                let mut row_f = vec![0.0; 9 * nx];
+                for x in 0..nx {
+                    let mut rho = 0.0;
+                    let mut ux = 0.0;
+                    let mut uy = 0.0;
+                    let mut fi = [0.0; 9];
+                    for q in 0..9 {
+                        let val = f[q * nx * ny + y * nx + x];
+                        fi[q] = val;
+                        rho += val;
+                        ux += val * D2Q9_E[q].0 as f64;
+                        uy += val * D2Q9_E[q].1 as f64;
+                    }
+                    if rho > 1e-15 {
+                        ux /= rho;
+                        uy /= rho;
+                    }
+
+                    // Compute central moments: κ_ab = Σ fi (ei_x - ux)^a (ei_y - uy)^b
+                    let mut k00 = 0.0;
+                    let mut _k10 = 0.0;
+                    let mut _k01 = 0.0;
+                    let mut k20 = 0.0;
+                    let mut k02 = 0.0;
+                    let mut k11 = 0.0;
+                    let mut k21 = 0.0;
+                    let mut k12 = 0.0;
+                    let mut k22 = 0.0;
+
+                    for q in 0..9 {
+                        let cx = D2Q9_E[q].0 as f64 - ux;
+                        let cy = D2Q9_E[q].1 as f64 - uy;
+                        k00 += fi[q];
+                        _k10 += fi[q] * cx;
+                        _k01 += fi[q] * cy;
+                        k20 += fi[q] * cx * cx;
+                        k02 += fi[q] * cy * cy;
+                        k11 += fi[q] * cx * cy;
+                        k21 += fi[q] * cx * cx * cy;
+                        k12 += fi[q] * cx * cy * cy;
+                        k22 += fi[q] * cx * cx * cy * cy;
+                    }
+
+                    // Normalized central moments (divide by rho)
+                    let _nk00 = k00 / rho; // = 1
+                    // k10, k01 = 0 by definition of central moments
+                    let nk20 = k20 / rho;
+                    let nk02 = k02 / rho;
+                    let nk11 = k11 / rho;
+                    let nk21 = k21 / rho;
+                    let nk12 = k12 / rho;
+                    let nk22 = k22 / rho;
+
+                    // Cumulants from central moments (for 2D, 2nd order cumulants = central moments)
+                    // c_20 = nk20, c_02 = nk02, c_11 = nk11
+                    // c_21 = nk21, c_12 = nk12
+                    // c_22 = nk22 - nk20*nk02 - 2*nk11*nk11  (connected part)
+
+                    let c20 = nk20;
+                    let c02 = nk02;
+                    let c11 = nk11;
+                    let c21 = nk21;
+                    let c12 = nk12;
+                    let c22 = nk22 - nk20 * nk02 - 2.0 * nk11 * nk11;
+
+                    // Equilibrium cumulants
+                    let c20_eq = CS2; // 1/3
+                    let c02_eq = CS2;
+                    let c11_eq = 0.0;
+                    let c21_eq = 0.0;
+                    let c12_eq = 0.0;
+                    let c22_eq = 0.0;
+
+                    // Relax cumulants
+                    // Trace (bulk): (c20 + c02) relaxed with omega_bulk
+                    // Normal stress difference: (c20 - c02) relaxed with omega (shear)
+                    // Shear stress c11: relaxed with omega
+                    let trace = c20 + c02;
+                    let diff = c20 - c02;
+                    let trace_eq = c20_eq + c02_eq;
+                    let diff_eq = c20_eq - c02_eq;
+
+                    let trace_new = trace - omega_bulk * (trace - trace_eq);
+                    let diff_new = diff - omega * (diff - diff_eq);
+                    let c11_new = c11 - omega * (c11 - c11_eq);
+
+                    let c20_new = 0.5 * (trace_new + diff_new);
+                    let c02_new = 0.5 * (trace_new - diff_new);
+
+                    // Higher-order cumulants: relax to equilibrium with rate 1 (no free parameter)
+                    let c21_new = c21 - 1.0 * (c21 - c21_eq);
+                    let c12_new = c12 - 1.0 * (c12 - c12_eq);
+                    let c22_new = c22 - 1.0 * (c22 - c22_eq);
+
+                    // Convert back: cumulants → normalized central moments
+                    let nk20_new = c20_new;
+                    let nk02_new = c02_new;
+                    let nk11_new = c11_new;
+                    let nk21_new = c21_new;
+                    let nk12_new = c12_new;
+                    let nk22_new = c22_new + nk20_new * nk02_new + 2.0 * nk11_new * nk11_new;
+
+                    // Central moments (multiply by rho)
+                    let k20_n = rho * nk20_new;
+                    let k02_n = rho * nk02_new;
+                    let k11_n = rho * nk11_new;
+                    let k21_n = rho * nk21_new;
+                    let k12_n = rho * nk12_new;
+                    let k22_n = rho * nk22_new;
+
+                    let mut fi_new = [0.0; 9];
+
+                    // Convert central moments back to raw moments:
+                    // M_ab = Σ_{p,q} C(a,p) C(b,q) ux^(a-p) uy^(b-q) κ_pq
+                    let m00 = rho;
+                    let m10 = rho * ux; // k10=0, so m10 = rho*ux
+                    let m01 = rho * uy;
+                    let m20 = k20_n + rho * ux * ux;
+                    let m02 = k02_n + rho * uy * uy;
+                    let m11 = k11_n + rho * ux * uy;
+                    let m21 = k21_n + 2.0 * ux * k11_n + uy * k20_n + rho * ux * ux * uy;
+                    let m12 = k12_n + 2.0 * uy * k11_n + ux * k02_n + rho * ux * uy * uy;
+                    let m22 = k22_n
+                        + 2.0 * ux * k12_n
+                        + 2.0 * uy * k21_n
+                        + ux * ux * k02_n
+                        + uy * uy * k20_n
+                        + 4.0 * ux * uy * k11_n
+                        + rho * ux * ux * uy * uy;
+
+                    // D2Q9 raw-moment-to-population inversion:
+                    // Derived from m_ab = Σ_q f_q · e_qx^a · e_qy^b
+                    // Diagonal populations: m11=f5-f6+f7-f8, m21=f5-f6-f7+f8,
+                    //   m12=f5+f6-f7-f8, m22=f5+f6+f7+f8
+                    // Axis: f1+f3=m20-m22, f1-f3=m10-m21, f2+f4=m02-m22, f2-f4=m01-m12
+
+                    fi_new[0] = m00 - m20 - m02 + m22;
+                    fi_new[1] = 0.5 * ((m20 - m22) + (m10 - m21));
+                    fi_new[2] = 0.5 * ((m02 - m22) + (m01 - m12));
+                    fi_new[3] = 0.5 * ((m20 - m22) - (m10 - m21));
+                    fi_new[4] = 0.5 * ((m02 - m22) - (m01 - m12));
+                    fi_new[5] = 0.25 * (m22 + m21 + m12 + m11);
+                    fi_new[6] = 0.25 * (m22 - m21 + m12 - m11);
+                    fi_new[7] = 0.25 * (m22 - m21 - m12 + m11);
+                    fi_new[8] = 0.25 * (m22 + m21 - m12 - m11);
+
+                    for q in 0..9 {
+                        row_f[q * nx + x] = fi_new[q];
+                    }
+                }
+                (y, row_f)
+            })
+            .collect();
+
+        for (y, row_f) in row_data {
+            for x in 0..nx {
+                for q in 0..9 {
+                    f[q * nx * ny + y * nx + x] = row_f[q * nx + x];
+                }
+            }
+        }
+    }
+
     /// Perform collision step based on configured operator
     pub fn collide(&mut self) {
         match self.collision {
             CollisionOperator::Bgk => self.collide_bgk(),
             CollisionOperator::Mrt => self.collide_mrt(),
             CollisionOperator::Trt => self.collide_trt(),
+            CollisionOperator::Cumulant => self.collide_cumulant(),
         }
     }
 
@@ -794,6 +1038,205 @@ impl Lattice3D {
     }
 }
 
+// ── D3Q27 Lattice ───────────────────────────────────────────────────────────
+
+/// 3D Lattice Boltzmann field on a D3Q27 lattice.
+///
+/// The D3Q27 model includes all 27 discrete velocities (rest + 6 axis + 12 edge + 8 corner).
+/// It provides higher isotropy than D3Q19 and is required for certain advanced collision
+/// operators (e.g., cumulant method in 3D).
+#[derive(Clone)]
+pub struct Lattice3D27 {
+    pub nx: usize,
+    pub ny: usize,
+    pub nz: usize,
+    pub f: Vec<f64>,
+    pub f_tmp: Vec<f64>,
+    pub tau: f64,
+    pub collision: CollisionOperator,
+}
+
+impl Lattice3D27 {
+    pub fn new(nx: usize, ny: usize, nz: usize, tau: f64, collision: CollisionOperator) -> Self {
+        let n = 27 * nx * ny * nz;
+        let mut f = vec![0.0; n];
+        for z in 0..nz {
+            for y in 0..ny {
+                for x in 0..nx {
+                    for q in 0..27 {
+                        f[q * nx * ny * nz + z * nx * ny + y * nx + x] = D3Q27_W[q];
+                    }
+                }
+            }
+        }
+        Self {
+            nx,
+            ny,
+            nz,
+            f: f.clone(),
+            f_tmp: f,
+            tau,
+            collision,
+        }
+    }
+
+    #[inline]
+    pub fn idx(&self, q: usize, x: usize, y: usize, z: usize) -> usize {
+        q * self.nx * self.ny * self.nz + z * self.nx * self.ny + y * self.nx + x
+    }
+
+    /// Compute macroscopic density
+    pub fn density(&self, x: usize, y: usize, z: usize) -> f64 {
+        let mut rho = 0.0;
+        for q in 0..27 {
+            rho += self.f[self.idx(q, x, y, z)];
+        }
+        rho
+    }
+
+    /// Compute macroscopic velocity
+    pub fn velocity(&self, x: usize, y: usize, z: usize) -> (f64, f64, f64) {
+        let mut rho = 0.0;
+        let mut ux = 0.0;
+        let mut uy = 0.0;
+        let mut uz = 0.0;
+        for q in 0..27 {
+            let fi = self.f[self.idx(q, x, y, z)];
+            rho += fi;
+            ux += fi * D3Q27_E[q].0 as f64;
+            uy += fi * D3Q27_E[q].1 as f64;
+            uz += fi * D3Q27_E[q].2 as f64;
+        }
+        if rho > 1e-15 {
+            (ux / rho, uy / rho, uz / rho)
+        } else {
+            (0.0, 0.0, 0.0)
+        }
+    }
+
+    /// D3Q27 equilibrium distribution
+    pub fn equilibrium(rho: f64, ux: f64, uy: f64, uz: f64) -> [f64; 27] {
+        let usq = ux * ux + uy * uy + uz * uz;
+        let mut feq = [0.0; 27];
+        for q in 0..27 {
+            let eu =
+                D3Q27_E[q].0 as f64 * ux + D3Q27_E[q].1 as f64 * uy + D3Q27_E[q].2 as f64 * uz;
+            feq[q] = D3Q27_W[q]
+                * rho
+                * (1.0 + eu / CS2 + eu * eu / (2.0 * CS2 * CS2) - usq / (2.0 * CS2));
+        }
+        feq
+    }
+
+    /// BGK collision for D3Q27
+    pub fn collide_bgk(&mut self) {
+        let nx = self.nx;
+        let ny = self.ny;
+        let nz = self.nz;
+        let nxy = nx * ny;
+        let tau = self.tau;
+        let omega = 1.0 / tau;
+        let f = &mut self.f;
+
+        let updates: Vec<(usize, Vec<f64>)> = (0..nz)
+            .into_par_iter()
+            .map(|z| {
+                let mut slice = vec![0.0; 27 * nxy];
+                for y in 0..ny {
+                    for x in 0..nx {
+                        let mut rho = 0.0;
+                        let mut ux = 0.0;
+                        let mut uy = 0.0;
+                        let mut uz = 0.0;
+                        let mut fi = [0.0; 27];
+                        for q in 0..27 {
+                            let val = f[q * nxy * nz + z * nxy + y * nx + x];
+                            fi[q] = val;
+                            rho += val;
+                            ux += val * D3Q27_E[q].0 as f64;
+                            uy += val * D3Q27_E[q].1 as f64;
+                            uz += val * D3Q27_E[q].2 as f64;
+                        }
+                        if rho > 1e-15 {
+                            ux /= rho;
+                            uy /= rho;
+                            uz /= rho;
+                        }
+                        let feq = Self::equilibrium(rho, ux, uy, uz);
+                        for q in 0..27 {
+                            slice[q * nxy + y * nx + x] = fi[q] - omega * (fi[q] - feq[q]);
+                        }
+                    }
+                }
+                (z, slice)
+            })
+            .collect();
+
+        for (z, slice) in updates {
+            for q in 0..27 {
+                for y in 0..ny {
+                    for x in 0..nx {
+                        f[q * nxy * nz + z * nxy + y * nx + x] = slice[q * nxy + y * nx + x];
+                    }
+                }
+            }
+        }
+    }
+
+    /// Perform collision step
+    pub fn collide(&mut self) {
+        self.collide_bgk();
+    }
+
+    /// Streaming step with periodic boundaries
+    pub fn stream(&mut self) {
+        let nx = self.nx;
+        let ny = self.ny;
+        let nz = self.nz;
+        let nxy = nx * ny;
+
+        self.f_tmp
+            .par_chunks_mut(nxy * nz)
+            .enumerate()
+            .for_each(|(q, chunk)| {
+                let ex = D3Q27_E[q].0;
+                let ey = D3Q27_E[q].1;
+                let ez = D3Q27_E[q].2;
+                for z in 0..nz {
+                    for y in 0..ny {
+                        for x in 0..nx {
+                            let sx = ((x as i32 - ex).rem_euclid(nx as i32)) as usize;
+                            let sy = ((y as i32 - ey).rem_euclid(ny as i32)) as usize;
+                            let sz = ((z as i32 - ez).rem_euclid(nz as i32)) as usize;
+                            chunk[z * nxy + y * nx + x] =
+                                self.f[q * nxy * nz + sz * nxy + sy * nx + sx];
+                        }
+                    }
+                }
+            });
+
+        std::mem::swap(&mut self.f, &mut self.f_tmp);
+    }
+
+    /// Set equilibrium at a node
+    pub fn set_equilibrium(
+        &mut self,
+        x: usize,
+        y: usize,
+        z: usize,
+        rho: f64,
+        ux: f64,
+        uy: f64,
+        uz: f64,
+    ) {
+        let feq = Self::equilibrium(rho, ux, uy, uz);
+        for q in 0..27 {
+            let idx = self.idx(q, x, y, z);
+            self.f[idx] = feq[q];
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -991,5 +1434,131 @@ mod tests {
         lat.stream();
         let f1_after = lat.f[lat.idx(1, 1, 0, 0)];
         assert!((f1_before - f1_after).abs() < 1e-14);
+    }
+
+    // ── D3Q27 tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_d3q27_weights_sum_to_one() {
+        let sum: f64 = D3Q27_W.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-14, "D3Q27 weights sum = {sum}");
+    }
+
+    #[test]
+    fn test_d3q27_opposite_directions() {
+        for i in 0..27 {
+            let opp = D3Q27_OPP[i];
+            assert_eq!(D3Q27_E[i].0, -D3Q27_E[opp].0, "x mismatch at {i}");
+            assert_eq!(D3Q27_E[i].1, -D3Q27_E[opp].1, "y mismatch at {i}");
+            assert_eq!(D3Q27_E[i].2, -D3Q27_E[opp].2, "z mismatch at {i}");
+        }
+    }
+
+    #[test]
+    fn test_d3q27_equilibrium_conserves_mass() {
+        let rho = 1.7;
+        let feq = Lattice3D27::equilibrium(rho, 0.04, -0.02, 0.03);
+        let sum: f64 = feq.iter().sum();
+        assert!((sum - rho).abs() < 1e-13, "D3Q27 mass: sum={sum}, rho={rho}");
+    }
+
+    #[test]
+    fn test_d3q27_equilibrium_conserves_momentum() {
+        let rho = 1.3;
+        let (ux, uy, uz) = (0.05, -0.03, 0.02);
+        let feq = Lattice3D27::equilibrium(rho, ux, uy, uz);
+        let mut jx = 0.0;
+        let mut jy = 0.0;
+        let mut jz = 0.0;
+        for q in 0..27 {
+            jx += feq[q] * D3Q27_E[q].0 as f64;
+            jy += feq[q] * D3Q27_E[q].1 as f64;
+            jz += feq[q] * D3Q27_E[q].2 as f64;
+        }
+        assert!((jx - rho * ux).abs() < 1e-13);
+        assert!((jy - rho * uy).abs() < 1e-13);
+        assert!((jz - rho * uz).abs() < 1e-13);
+    }
+
+    #[test]
+    fn test_d3q27_init_density() {
+        let lat = Lattice3D27::new(4, 4, 4, 1.0, CollisionOperator::Bgk);
+        for z in 0..4 {
+            for y in 0..4 {
+                for x in 0..4 {
+                    assert!((lat.density(x, y, z) - 1.0).abs() < 1e-14);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_d3q27_streaming() {
+        let mut lat = Lattice3D27::new(5, 5, 5, 1.0, CollisionOperator::Bgk);
+        lat.set_equilibrium(0, 0, 0, 2.0, 0.0, 0.0, 0.0);
+        let f1_before = lat.f[lat.idx(1, 0, 0, 0)];
+        lat.stream();
+        let f1_after = lat.f[lat.idx(1, 1, 0, 0)];
+        assert!((f1_before - f1_after).abs() < 1e-14);
+    }
+
+    #[test]
+    fn test_d3q27_collision_preserves_mass() {
+        let mut lat = Lattice3D27::new(4, 4, 4, 0.8, CollisionOperator::Bgk);
+        lat.set_equilibrium(2, 2, 2, 1.3, 0.04, -0.02, 0.01);
+        let rho_before = lat.density(2, 2, 2);
+        lat.collide();
+        let rho_after = lat.density(2, 2, 2);
+        assert!(
+            (rho_before - rho_after).abs() < 1e-13,
+            "D3Q27 mass not conserved: {rho_before} vs {rho_after}"
+        );
+    }
+
+    // ── Cumulant collision tests ────────────────────────────────────────
+
+    #[test]
+    fn test_cumulant_collision_preserves_mass() {
+        let mut lat = Lattice2D::new(5, 5, 0.8, CollisionOperator::Cumulant);
+        lat.set_equilibrium(2, 2, 1.1, 0.05, 0.02);
+        let rho_before = lat.density(2, 2);
+        lat.collide_cumulant();
+        let rho_after = lat.density(2, 2);
+        assert!(
+            (rho_before - rho_after).abs() < 1e-12,
+            "Cumulant doesn't conserve mass: {rho_before} vs {rho_after}"
+        );
+    }
+
+    #[test]
+    fn test_cumulant_collision_preserves_momentum() {
+        let mut lat = Lattice2D::new(5, 5, 0.8, CollisionOperator::Cumulant);
+        lat.set_equilibrium(2, 2, 1.1, 0.05, 0.02);
+        let (ux_before, uy_before) = lat.velocity(2, 2);
+        lat.collide_cumulant();
+        let (ux_after, uy_after) = lat.velocity(2, 2);
+        assert!(
+            (ux_before - ux_after).abs() < 1e-12,
+            "Cumulant x-momentum: {ux_before} vs {ux_after}"
+        );
+        assert!(
+            (uy_before - uy_after).abs() < 1e-12,
+            "Cumulant y-momentum: {uy_before} vs {uy_after}"
+        );
+    }
+
+    #[test]
+    fn test_cumulant_at_equilibrium_is_noop() {
+        let mut lat = Lattice2D::new(5, 5, 0.8, CollisionOperator::Cumulant);
+        let f_before: Vec<f64> = lat.f.clone();
+        lat.collide_cumulant();
+        for i in 0..f_before.len() {
+            assert!(
+                (lat.f[i] - f_before[i]).abs() < 1e-13,
+                "Cumulant changed equilibrium at index {i}: {} vs {}",
+                f_before[i],
+                lat.f[i]
+            );
+        }
     }
 }

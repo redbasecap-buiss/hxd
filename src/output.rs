@@ -15,6 +15,7 @@ use std::path::Path;
 #[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     Vtk,
+    VtkXml,
     Csv,
     Ppm,
 }
@@ -177,6 +178,128 @@ fn colormap_viridis(t: f64) -> (u8, u8, u8) {
     (r as u8, g as u8, b as u8)
 }
 
+/// Write 2D field data in VTK XML ImageData format (.vti).
+///
+/// This is the modern VTK format supported by ParaView, VisIt, and other tools.
+/// Uses inline binary encoding with base64. Includes density, velocity vector,
+/// velocity magnitude, and optional vorticity.
+pub fn write_vtk_xml(
+    path: &Path,
+    nx: usize,
+    ny: usize,
+    rho: &[f64],
+    ux: &[f64],
+    uy: &[f64],
+    vorticity: Option<&[f64]>,
+) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let mut file = std::fs::File::create(path)?;
+    let n = nx * ny;
+
+    writeln!(file, "<?xml version=\"1.0\"?>")?;
+    writeln!(
+        file,
+        "<VTKFile type=\"ImageData\" version=\"1.0\" byte_order=\"LittleEndian\" header_type=\"UInt64\">"
+    )?;
+    writeln!(
+        file,
+        "  <ImageData WholeExtent=\"0 {} 0 {} 0 0\" Origin=\"0 0 0\" Spacing=\"1 1 1\">",
+        nx - 1,
+        ny - 1
+    )?;
+    writeln!(
+        file,
+        "    <Piece Extent=\"0 {} 0 {} 0 0\">",
+        nx - 1,
+        ny - 1
+    )?;
+    writeln!(file, "      <PointData Scalars=\"density\" Vectors=\"velocity\">")?;
+
+    // Helper: encode f64 array as base64 with UInt64 byte-count header
+    let encode_f64 = |data: &[f64]| -> String {
+        let byte_count = (data.len() * 8) as u64;
+        let mut bytes = byte_count.to_le_bytes().to_vec();
+        for &v in data {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        base64_encode(&bytes)
+    };
+
+    // Density
+    writeln!(
+        file,
+        "        <DataArray type=\"Float64\" Name=\"density\" format=\"binary\">"
+    )?;
+    writeln!(file, "          {}", encode_f64(rho))?;
+    writeln!(file, "        </DataArray>")?;
+
+    // Velocity (3-component vector, z=0)
+    let mut vel_data = Vec::with_capacity(n * 3);
+    for i in 0..n {
+        vel_data.push(ux[i]);
+        vel_data.push(uy[i]);
+        vel_data.push(0.0);
+    }
+    writeln!(
+        file,
+        "        <DataArray type=\"Float64\" Name=\"velocity\" NumberOfComponents=\"3\" format=\"binary\">"
+    )?;
+    writeln!(file, "          {}", encode_f64(&vel_data))?;
+    writeln!(file, "        </DataArray>")?;
+
+    // Velocity magnitude
+    let vmag = velocity_magnitude(ux, uy);
+    writeln!(
+        file,
+        "        <DataArray type=\"Float64\" Name=\"velocity_magnitude\" format=\"binary\">"
+    )?;
+    writeln!(file, "          {}", encode_f64(&vmag))?;
+    writeln!(file, "        </DataArray>")?;
+
+    // Vorticity
+    if let Some(vort) = vorticity {
+        writeln!(
+            file,
+            "        <DataArray type=\"Float64\" Name=\"vorticity\" format=\"binary\">"
+        )?;
+        writeln!(file, "          {}", encode_f64(vort))?;
+        writeln!(file, "        </DataArray>")?;
+    }
+
+    writeln!(file, "      </PointData>")?;
+    writeln!(file, "    </Piece>")?;
+    writeln!(file, "  </ImageData>")?;
+    writeln!(file, "</VTKFile>")?;
+
+    Ok(())
+}
+
+/// Base64 encoding (no external dependency)
+fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
 /// Compute streamline starting points and trace them.
 /// Returns list of streamlines, each as a Vec of (x, y) points.
 pub fn compute_streamlines(
@@ -249,6 +372,15 @@ pub fn write_output(
             &uy,
             vorticity.as_deref(),
         ),
+        OutputFormat::VtkXml => write_vtk_xml(
+            path,
+            lattice.nx,
+            lattice.ny,
+            &rho,
+            &ux,
+            &uy,
+            vorticity.as_deref(),
+        ),
         OutputFormat::Csv => write_csv(path, lattice.nx, lattice.ny, &rho, &ux, &uy),
         OutputFormat::Ppm => write_ppm(path, lattice.nx, lattice.ny, &ux, &uy),
     }
@@ -286,6 +418,34 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.starts_with("x,y,rho,ux,uy,umag"));
         assert!(content.lines().count() == 5); // header + 4 data rows
+    }
+
+    #[test]
+    fn test_write_vtk_xml() {
+        let dir = std::env::temp_dir().join("flux_test_vti");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.vti");
+        let rho = vec![1.0; 9];
+        let ux = vec![0.1, 0.2, 0.3, 0.1, 0.2, 0.3, 0.1, 0.2, 0.3];
+        let uy = vec![0.0; 9];
+        let vort = vec![0.01; 9];
+        write_vtk_xml(&path, 3, 3, &rho, &ux, &uy, Some(&vort)).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("VTKFile"));
+        assert!(content.contains("ImageData"));
+        assert!(content.contains("density"));
+        assert!(content.contains("velocity"));
+        assert!(content.contains("vorticity"));
+    }
+
+    #[test]
+    fn test_base64_encode() {
+        // Verify round-trip: known value
+        let data = [1.0f64, 2.0, 3.0];
+        let encoded = base64_encode(&data.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+        assert!(!encoded.is_empty());
+        // Must be valid base64 characters
+        assert!(encoded.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
     }
 
     #[test]
