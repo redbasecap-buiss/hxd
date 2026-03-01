@@ -1,187 +1,94 @@
-# FLUX 🌊
+# hxd ⚡🔬
 
-**State-of-the-art Lattice Boltzmann Method (LBM) fluid dynamics solver in pure Rust — university-grade CFD.**
+A modern terminal hex editor written in pure Rust.
 
-[![CI](https://github.com/redbasecap-buiss/flux/actions/workflows/ci.yml/badge.svg)](https://github.com/redbasecap-buiss/flux/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-
-## What is this?
-
-FLUX implements the Lattice Boltzmann Method for computational fluid dynamics. Unlike traditional Navier-Stokes solvers, LBM evolves particle distribution functions on a discrete lattice, making it naturally parallelizable and well-suited for complex geometries.
-
-## Theory
-
-### The Lattice Boltzmann Equation
-
-The LBM evolves distribution functions $f_i(\mathbf{x}, t)$ according to:
-
-$$f_i(\mathbf{x} + \mathbf{e}_i \Delta t, t + \Delta t) = f_i(\mathbf{x}, t) + \Omega_i$$
-
-where $\mathbf{e}_i$ are the discrete velocities and $\Omega_i$ is the collision operator.
-
-### Equilibrium Distribution
-
-The Maxwell-Boltzmann equilibrium distribution (truncated to 2nd order):
-
-$$f_i^{eq} = w_i \rho \left(1 + \frac{\mathbf{e}_i \cdot \mathbf{u}}{c_s^2} + \frac{(\mathbf{e}_i \cdot \mathbf{u})^2}{2c_s^4} - \frac{\mathbf{u} \cdot \mathbf{u}}{2c_s^2}\right)$$
-
-### BGK Collision Operator
-
-Single relaxation time (Bhatnagar-Gross-Krook):
-
-$$\Omega_i^{BGK} = -\frac{1}{\tau}(f_i - f_i^{eq})$$
-
-where $\tau$ is related to kinematic viscosity: $\nu = c_s^2(\tau - \tfrac{1}{2})$
-
-### MRT Collision Operator
-
-Multiple Relaxation Time transforms to moment space for independent relaxation:
-
-$$\Omega^{MRT} = -\mathbf{M}^{-1}\mathbf{S}(\mathbf{m} - \mathbf{m}^{eq})$$
-
-where $\mathbf{M}$ is the transformation matrix and $\mathbf{S}$ is the diagonal relaxation matrix.
-
-### Lattice Models
-
-| Model | Dimensions | Velocities | Use Case |
-|-------|-----------|------------|----------|
-| D2Q9  | 2D        | 9          | Standard 2D flows |
-| D3Q19 | 3D        | 19         | 3D simulations |
+**xxd meets vim** — interactive editing, not just viewing.
 
 ## Features
 
-- **D2Q9** and **D3Q19** lattice models
-- **BGK** and **MRT** collision operators
-- **Smagorinsky** subgrid model for Large Eddy Simulation (LES)
-- **Boundary conditions**: bounce-back, Zou-He, periodic, open, moving walls
-- **Geometry**: circles, spheres, rectangles, STL import, signed distance fields
-- **Output**: VTK (ParaView), CSV, PPM image
-- **Parallelism**: Rayon-based shared memory
-- **Checkpoint/restart** support
-- **Validation suite** against analytical solutions
+- 🖥️ **TUI** — three-column layout: offset | hex | ASCII with ratatui
+- ⌨️ **Vim keybindings** — hjkl, gg/G, Ctrl-D/U, /search, n/N, :commands
+- ✏️ **Edit mode** — `i` to edit bytes, type hex digits, Esc to return
+- 🔍 **Search** — hex pattern (`/FF AB`) or ASCII string search with wrap-around
+- 📊 **Multiple views** — Tab to cycle: Hex → Binary → Octal → Decimal
+- ↩️ **Undo/Redo** — `u` to undo, Ctrl-R to redo (full history)
+- ✂️ **Visual selection** — `v` to select range, `y` to yank, `d` to delete
+- 🔖 **Bookmarks** — `m` + key to mark, `'` + key to jump
+- 🏗️ **Structure detection** — recognizes PNG, JPEG, ZIP, PDF, ELF, PE, Mach-O, SQLite, GZIP
+- 💾 **Large file support** — memory-mapped I/O via mmap
+- 🎨 **Color-coded bytes** — null (dim), printable (green), control (red), high (yellow)
+- 📋 **CLI subcommands** — `dump` (colored xxd), `diff` (side-by-side), `patch` (scriptable)
+- 💻 **Save** — `:w`, `:wq`, `:q!` — just like vim
+- 📥 **Pipe support** — `cat file | hxd`
 
 ## Installation
 
 ```bash
-cargo install --path .
-```
+cargo install hxd
 
-Or build from source:
-
-```bash
-cargo build --release
+# Or via Homebrew
+brew tap redbasecap-buiss/tap
+brew install hxd
 ```
 
 ## Usage
 
-### Generate example config
-
 ```bash
-flux init
+# Interactive editor
+hxd myfile.bin
+
+# Colored hex dump
+hxd dump myfile.bin
+
+# Side-by-side diff
+hxd diff file1.bin file2.bin
+
+# Patch bytes at offset
+hxd patch myfile.bin 0x100 "DEADBEEF"
+
+# From stdin
+cat /bin/ls | hxd
 ```
 
-### Run a simulation
+## Keybindings
 
-```bash
-flux run flux.toml --output results/
-```
+| Key | Action |
+|-----|--------|
+| `h/j/k/l` | Move left/down/up/right |
+| `gg` / `G` | Go to start / end |
+| `Ctrl-D/U` | Page down / up |
+| `i` | Enter edit mode |
+| `Esc` | Back to normal mode |
+| `v` | Visual selection |
+| `y` / `d` | Yank / delete selection |
+| `/` | Search (hex or ASCII) |
+| `n` / `N` | Next / previous match |
+| `u` | Undo |
+| `Ctrl-R` | Redo |
+| `m` + key | Set bookmark |
+| `'` + key | Jump to bookmark |
+| `Tab` | Cycle view mode |
+| `:w` | Save |
+| `:wq` | Save & quit |
+| `:q!` | Force quit |
+| `q` | Quit |
 
-### Performance benchmark
+## Comparison
 
-```bash
-flux benchmark -n 256 --steps 1000
-```
-
-### Run validation suite
-
-```bash
-flux validate
-```
-
-## Configuration
-
-```toml
-[domain]
-nx = 256
-ny = 256
-nz = 1  # 1 = 2D mode
-
-[physics]
-reynolds = 100
-mach = 0.1
-
-[solver]
-collision = "bgk"  # or "mrt"
-max_steps = 50000
-convergence_threshold = 1e-6
-checkpoint_interval = 1000
-
-[output]
-format = "vtk"
-interval = 100
-fields = ["velocity", "density", "vorticity"]
-
-[boundary]
-north = "wall"
-south = "wall"
-east = "pressure"
-west = "velocity"
-```
-
-## Validation Results
-
-FLUX has been validated against classical CFD benchmarks:
-
-| Test Case | Reference | Error | Status |
-|-----------|-----------|-------|--------|
-| Poiseuille Flow | Analytical parabolic profile | < 1% | ✅ |
-| Couette Flow | Analytical linear profile | < 1% | ✅ |
-| Lid-Driven Cavity | Ghia et al. (1982) | < 10% avg | ✅ |
-| Taylor-Green Vortex | Analytical energy decay | < 5% | ✅ |
-| Convergence Order | 2nd order spatial | > 1.5 | ✅ |
-
-## Architecture
-
-```
-src/
-├── main.rs        # CLI interface
-├── lattice.rs     # D2Q9/D3Q19 models, collision, streaming
-├── boundary.rs    # Boundary conditions (bounce-back, Zou-He, etc.)
-├── geometry.rs    # Domain geometry, obstacles, STL import
-├── physics.rs     # Unit conversion, Reynolds/Mach numbers
-├── output.rs      # VTK, CSV, PPM output
-├── solver.rs      # Simulation engine, config, checkpointing
-├── parallel.rs    # Rayon parallelism utilities
-└── validation.rs  # Validation test cases
-```
-
-## References
-
-1. **Krüger, T. et al.** (2017). *The Lattice Boltzmann Method: Principles and Practice*. Springer.
-2. **Ghia, U., Ghia, K.N., & Shin, C.T.** (1982). High-Re solutions for incompressible flow using the Navier-Stokes equations and a multigrid method. *Journal of Computational Physics*, 48(3), 387-411.
-3. **Zou, Q. & He, X.** (1997). On pressure and velocity boundary conditions for the lattice Boltzmann BGK model. *Physics of Fluids*, 9(6), 1591-1598.
-4. **Lallemand, P. & Luo, L.-S.** (2000). Theory of the lattice Boltzmann method: Dispersion, dissipation, isotropy, Galilean invariance, and stability. *Physical Review E*, 61(6), 6546.
-
-## Python Visualization Examples
-
-The `examples/` directory includes Python scripts that demonstrate LBM concepts with beautiful visualizations:
-
-### `vortex_street.py` — von Kármán Vortex Street
-- **Flow around a cylinder** with spectacular vortex shedding
-- **D2Q9 implementation** from scratch (educational)
-- **High-quality MP4 output** with vorticity visualization
-- Run: `python3 examples/vortex_street.py`
-
-### `lid_cavity.py` — Lid-Driven Cavity Flow  
-- **Classical CFD benchmark** (Ghia et al. 1982)
-- **Velocity magnitude + streamlines** visualization
-- **Moving wall boundary conditions**
-- Run: `python3 examples/lid_cavity.py`
-
-**Requirements:** `pip3 install numpy matplotlib`
-
-These complement the high-performance Rust solver with educational Python implementations perfect for learning LBM theory and creating publication-quality visualizations.
+| Feature | hxd | xxd | hexyl | hexedit |
+|---------|-----|-----|-------|---------|
+| Interactive editing | ✅ | ❌ | ❌ | ✅ |
+| Vim keybindings | ✅ | ❌ | ❌ | ❌ |
+| Undo/Redo | ✅ | ❌ | ❌ | ❌ |
+| Visual selection | ✅ | ❌ | ❌ | ❌ |
+| Multiple views | ✅ | ❌ | ❌ | ❌ |
+| Hex diff | ✅ | ❌ | ❌ | ❌ |
+| File magic detection | ✅ | ❌ | ❌ | ❌ |
+| Bookmarks | ✅ | ❌ | ❌ | ❌ |
+| mmap large files | ✅ | ❌ | ✅ | ✅ |
+| Single binary | ✅ | ✅ | ✅ | ✅ |
+| Pure Rust | ✅ | ❌ | ✅ | ❌ |
 
 ## License
 
-MIT
+MIT © 2026 Nicola Spieser

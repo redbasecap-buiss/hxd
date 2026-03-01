@@ -1,35 +1,20 @@
 [package]
-name = "flux"
-version = "0.2.0"
+name = "hxd"
+version = "0.1.0"
 edition = "2021"
 authors = ["Nicola Spieser <redbasecap-buiss@users.noreply.github.com>"]
-description = "State-of-the-art Lattice Boltzmann fluid dynamics solver in pure Rust — university-grade CFD"
+description = "Modern terminal hex editor in Rust"
 license = "MIT"
-readme = "README.md"
-repository = "https://github.com/redbasecap-buiss/flux"
-keywords = ["cfd", "lattice-boltzmann", "fluid-dynamics", "simulation"]
-categories = ["science", "simulation"]
-
-[lib]
-name = "flux"
-path = "src/lib.rs"
-
-[[bin]]
-name = "flux"
-path = "src/main.rs"
+repository = "https://github.com/redbasecap-buiss/hxd"
+keywords = ["hex", "editor", "tui", "binary", "terminal"]
 
 [dependencies]
-rayon = "1.10"
 clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+ratatui = "0.29"
+memmap2 = "0.9"
+anyhow = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 toml = "0.8"
-byteorder = "1.5"
-# wgpu = "23"      # GPU compute — disabled until needed (heavy compile)
-# pollster = "0.4"  # async runtime for wgpu
-log = "0.4"
-env_logger = "0.11"
-
-[profile.release]
-opt-level = 3
-lto = true
+notify = "7"
+dirs = "6"

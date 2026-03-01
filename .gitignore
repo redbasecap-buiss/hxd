@@ -1,5 +1,2 @@
-/target
-/output
-*.vtk
-*.ppm
-checkpoint.bin
+.DS_Store
+target/

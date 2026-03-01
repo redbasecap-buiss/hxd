@@ -1,135 +1,267 @@
-//! FLUX — Lattice Boltzmann Method fluid dynamics solver
-//!
-//! A state-of-the-art LBM solver in pure Rust for university-grade CFD.
+#![allow(dead_code)]
+mod app;
+mod buffer;
+mod config;
+mod diff;
+mod dump;
+mod magic;
+mod patch;
+mod ui;
+mod watcher;
 
-#![allow(
-    clippy::needless_range_loop,
-    clippy::too_many_arguments,
-    clippy::type_complexity,
-    dead_code
-)]
-
-mod boundary;
-mod geometry;
-mod lattice;
-mod output;
-mod parallel;
-mod physics;
-mod solver;
-mod turbulence;
-mod validation;
-
+use app::{App, Mode};
+use buffer::Buffer;
 use clap::{Parser, Subcommand};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::prelude::*;
+use std::io;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "flux")]
-#[command(about = "FLUX — Lattice Boltzmann Method fluid dynamics solver")]
-#[command(version)]
+#[command(name = "hxd", version, about = "Modern terminal hex editor")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
+    file: Option<PathBuf>,
+    #[arg(short, long, default_value = "16")]
+    cols: usize,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run a simulation from a config file
-    Run {
-        /// Path to the configuration TOML file
-        config: PathBuf,
-        /// Output directory
-        #[arg(short, long, default_value = "output")]
-        output: PathBuf,
+    Dump {
+        file: PathBuf,
+        #[arg(short, long, default_value = "16")]
+        cols: usize,
     },
-    /// Run performance benchmark (MLUPS)
-    Benchmark {
-        /// Grid size (NxN)
-        #[arg(short = 'n', long, default_value = "256")]
-        size: usize,
-        /// Number of steps
-        #[arg(short, long, default_value = "1000")]
-        steps: usize,
+    Diff {
+        file1: PathBuf,
+        file2: PathBuf,
+        #[arg(short, long, default_value = "8")]
+        cols: usize,
     },
-    /// Run validation suite against analytical solutions
-    Validate,
-    /// Generate an example configuration file
-    Init {
-        /// Output path for the config file
-        #[arg(default_value = "flux.toml")]
-        path: PathBuf,
+    Patch {
+        file: PathBuf,
+        offset: String,
+        hex_bytes: String,
     },
+    /// Generate example config at ~/.config/hxd/config.toml
+    InitConfig,
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-
     match cli.command {
-        Commands::Run { config, output } => {
-            let cfg = match solver::load_config(&config) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
+        Some(Commands::Dump { file, cols }) => {
+            dump::print_colored_dump(&std::fs::read(&file)?, cols)?;
+        }
+        Some(Commands::Diff { file1, file2, cols }) => {
+            diff::print_diff(&std::fs::read(&file1)?, &std::fs::read(&file2)?, cols)?;
+        }
+        Some(Commands::Patch {
+            file,
+            offset,
+            hex_bytes,
+        }) => {
+            let off = patch::parse_offset(&offset).map_err(|e| anyhow::anyhow!(e))?;
+            let bytes = patch::parse_hex_string(&hex_bytes).map_err(|e| anyhow::anyhow!(e))?;
+            patch::patch_file(&file, off, &bytes)?;
+            println!("Patched {} bytes at 0x{:x}", bytes.len(), off);
+        }
+        Some(Commands::InitConfig) => {
+            let path = config::config_path();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, config::example_config())?;
+            println!("Created config at {}", path.display());
+        }
+        None => {
+            let buf = if let Some(ref p) = cli.file {
+                Buffer::from_file(p)?
+            } else {
+                let mut d = Vec::new();
+                io::Read::read_to_end(&mut io::stdin(), &mut d)?;
+                Buffer::from_bytes(d)
             };
-            let mut sim = match solver::Simulation::from_config(cfg) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
-            };
-            match sim.run(&output) {
-                Ok(result) => {
-                    if !result.converged {
-                        eprintln!("Warning: simulation did not converge within max steps");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Simulation error: {e}");
-                    std::process::exit(1);
+            run_tui(buf, cli.cols)?;
+        }
+    }
+    Ok(())
+}
+
+fn run_tui(buffer: Buffer, cols: usize) -> io::Result<()> {
+    terminal::enable_raw_mode()?;
+    crossterm::execute!(io::stdout(), EnterAlternateScreen)?;
+    let mut term = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    let mut app = App::new(buffer, cols);
+
+    // Load colors and start watcher
+    let shared_colors = config::new_shared_colors();
+    let _watcher_guard = watcher::watch_config(shared_colors.clone()).ok();
+
+    loop {
+        app.rows_visible = (term.size()?.height as usize).saturating_sub(4);
+
+        // Check for config reload
+        if let Some((_, ref rx)) = _watcher_guard {
+            while rx.try_recv().is_ok() {
+                app.status_message = "Config reloaded".into();
+            }
+        }
+
+        let colors = shared_colors.read().unwrap().clone();
+        term.draw(|f| ui::draw(f, &app, &colors))?;
+
+        if app.should_quit {
+            break;
+        }
+        if event::poll(Duration::from_millis(250))? {
+            if let Event::Key(key) = event::read()? {
+                match app.mode {
+                    Mode::Normal => handle_normal(&mut app, key.code, key.modifiers),
+                    Mode::Edit => handle_edit(&mut app, key.code),
+                    Mode::Command => handle_cmd(&mut app, key.code),
+                    Mode::Search => handle_search(&mut app, key.code),
+                    Mode::Visual => handle_visual(&mut app, key.code),
                 }
             }
         }
-        Commands::Benchmark { size, steps } => {
-            run_benchmark(size, steps);
+    }
+    terminal::disable_raw_mode()?;
+    crossterm::execute!(term.backend_mut(), LeaveAlternateScreen)?;
+    Ok(())
+}
+
+fn handle_normal(app: &mut App, key: KeyCode, mods: KeyModifiers) {
+    if app.pending_bookmark {
+        if let KeyCode::Char(c) = key {
+            app.set_bookmark(c);
+        } else {
+            app.pending_bookmark = false;
         }
-        Commands::Validate => {
-            validation::run_validation_suite();
+        return;
+    }
+    if app.pending_goto_bookmark {
+        if let KeyCode::Char(c) = key {
+            app.goto_bookmark(c);
+        } else {
+            app.pending_goto_bookmark = false;
         }
-        Commands::Init { path } => {
-            let config = solver::generate_example_config();
-            std::fs::write(&path, config).expect("Failed to write config file");
-            println!("Generated example config at {}", path.display());
+        return;
+    }
+    match key {
+        KeyCode::Char('q') => {
+            if app.buffer.is_modified() {
+                app.status_message = "Unsaved! :q!".into();
+            } else {
+                app.should_quit = true;
+            }
         }
+        KeyCode::Char('h') | KeyCode::Left => app.move_left(),
+        KeyCode::Char('l') | KeyCode::Right => app.move_right(),
+        KeyCode::Char('k') | KeyCode::Up => app.move_up(),
+        KeyCode::Char('j') | KeyCode::Down => app.move_down(),
+        KeyCode::Char('g') => app.goto_start(),
+        KeyCode::Char('G') => app.goto_end(),
+        KeyCode::Char('d') if mods.contains(KeyModifiers::CONTROL) => app.page_down(),
+        KeyCode::Char('u') if mods.contains(KeyModifiers::CONTROL) => app.page_up(),
+        KeyCode::Char('i') => app.enter_edit_mode(),
+        KeyCode::Char('v') => app.enter_visual_mode(),
+        KeyCode::Char(':') => {
+            app.mode = Mode::Command;
+            app.command_input.clear();
+        }
+        KeyCode::Char('/') => {
+            app.mode = Mode::Search;
+            app.search_input.clear();
+        }
+        KeyCode::Char('n') => app.search_next(),
+        KeyCode::Char('N') => app.search_prev(),
+        KeyCode::Char('u') => {
+            if app.buffer.undo() {
+                app.status_message = "Undo".into();
+            }
+        }
+        KeyCode::Char('r') if mods.contains(KeyModifiers::CONTROL) => {
+            if app.buffer.redo() {
+                app.status_message = "Redo".into();
+            }
+        }
+        KeyCode::Char('m') => app.pending_bookmark = true,
+        KeyCode::Char('\'') => app.pending_goto_bookmark = true,
+        KeyCode::Tab => {
+            app.view_mode = app.view_mode.next();
+            app.status_message = format!("View: {}", app.view_mode.label());
+        }
+        _ => {}
     }
 }
 
-fn run_benchmark(size: usize, steps: usize) {
-    use lattice::CollisionOperator;
-    use std::time::Instant;
-
-    println!("FLUX Benchmark");
-    println!("==============");
-    println!("Grid: {size}×{size}");
-    println!("Steps: {steps}");
-    println!();
-
-    for collision in &[CollisionOperator::Bgk, CollisionOperator::Mrt] {
-        let mut lat = lattice::Lattice2D::new(size, size, 0.8, *collision);
-
-        let start = Instant::now();
-        for _ in 0..steps {
-            lat.collide();
-            lat.stream();
-        }
-        let elapsed = start.elapsed().as_secs_f64();
-        let mlups = parallel::compute_mlups(size * size, steps, elapsed);
-        println!("{:?}: {mlups:.1} MLUPS ({elapsed:.2}s)", collision);
+fn handle_edit(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Esc => app.exit_edit_mode(),
+        KeyCode::Char(c) if c.is_ascii_hexdigit() => app.edit_input(c),
+        KeyCode::Left => app.move_left(),
+        KeyCode::Right => app.move_right(),
+        KeyCode::Up => app.move_up(),
+        KeyCode::Down => app.move_down(),
+        _ => {}
     }
 }
 
-#[cfg(test)]
-mod tests {
-    // Integration tests are in the validation module
+fn handle_cmd(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Enter => app.execute_command(),
+        KeyCode::Esc => {
+            app.mode = Mode::Normal;
+            app.command_input.clear();
+        }
+        KeyCode::Backspace => {
+            app.command_input.pop();
+            if app.command_input.is_empty() {
+                app.mode = Mode::Normal;
+            }
+        }
+        KeyCode::Char(c) => app.command_input.push(c),
+        _ => {}
+    }
+}
+
+fn handle_search(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Enter => {
+            app.mode = Mode::Normal;
+            app.search_hex();
+        }
+        KeyCode::Esc => {
+            app.mode = Mode::Normal;
+            app.search_input.clear();
+        }
+        KeyCode::Backspace => {
+            app.search_input.pop();
+        }
+        KeyCode::Char(c) => app.search_input.push(c),
+        _ => {}
+    }
+}
+
+fn handle_visual(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Esc => {
+            app.visual_start = None;
+            app.mode = Mode::Normal;
+            app.status_message.clear();
+        }
+        KeyCode::Char('h') | KeyCode::Left => app.move_left(),
+        KeyCode::Char('l') | KeyCode::Right => app.move_right(),
+        KeyCode::Char('k') | KeyCode::Up => app.move_up(),
+        KeyCode::Char('j') | KeyCode::Down => app.move_down(),
+        KeyCode::Char('y') | KeyCode::Char('d') => app.yank_visual(),
+        KeyCode::Char('G') => app.goto_end(),
+        KeyCode::Char('g') => app.goto_start(),
+        _ => {}
+    }
 }
