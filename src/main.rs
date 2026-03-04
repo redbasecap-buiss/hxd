@@ -191,6 +191,7 @@ fn handle_normal(app: &mut App, key: KeyCode, mods: KeyModifiers) {
             }
         }
         KeyCode::Char('m') => app.pending_bookmark = true,
+        KeyCode::Char('p') => app.paste_at_cursor(),
         KeyCode::Char('\'') => app.pending_goto_bookmark = true,
         KeyCode::Tab => {
             app.view_mode = app.view_mode.next();

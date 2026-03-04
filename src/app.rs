@@ -200,6 +200,39 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+
+    pub fn paste_at_cursor(&mut self) {
+        if self.buffer.clipboard().is_empty() {
+            self.status_message = "Nothing to paste".into();
+            return;
+        }
+        let clip = self.buffer.clipboard().to_vec();
+        let mut count = 0;
+        for (i, &b) in clip.iter().enumerate() {
+            let pos = self.cursor + i;
+            if pos < self.buffer.len() {
+                self.buffer.set_byte(pos, b);
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        self.status_message = format!("{} bytes pasted", count);
+    }
+
+    pub fn fill_range(&mut self, offset: usize, count: usize, byte: u8) {
+        let mut filled = 0;
+        for i in 0..count {
+            let pos = offset + i;
+            if pos < self.buffer.len() {
+                self.buffer.set_byte(pos, byte);
+                filled += 1;
+            } else {
+                break;
+            }
+        }
+        self.status_message = format!("Filled {} bytes with 0x{:02X}", filled, byte);
+    }
     pub fn visual_range(&self) -> Option<(usize, usize)> {
         self.visual_start.map(|s| {
             if s <= self.cursor {
@@ -275,6 +308,9 @@ impl App {
                 }
             }
             "q!" => self.should_quit = true,
+            "help" => {
+                self.status_message = "q w wq :off :/pat n N i v m\x27 p Tab :fill off n byte".into();
+            }
             "w" => match self.buffer.save() {
                 Ok(()) => self.status_message = "Written".into(),
                 Err(e) => self.status_message = format!("{}", e),
@@ -290,6 +326,21 @@ impl App {
                         self.ensure_visible();
                     } else {
                         self.status_message = "Beyond EOF".into();
+                    }
+                } else if cmd.starts_with("fill ") {
+                    let parts: Vec<&str> = cmd.strip_prefix("fill ").unwrap_or("").split_whitespace().collect();
+                    if parts.len() == 3 {
+                        if let (Ok(off), Ok(cnt), Ok(byte)) = (
+                            crate::patch::parse_offset(parts[0]),
+                            parts[1].parse::<usize>(),
+                            u8::from_str_radix(parts[2].trim_start_matches("0x"), 16),
+                        ) {
+                            self.fill_range(off as usize, cnt, byte);
+                        } else {
+                            self.status_message = "Usage: fill <offset> <count> <hex_byte>".into();
+                        }
+                    } else {
+                        self.status_message = "Usage: fill <offset> <count> <hex_byte>".into();
                     }
                 } else {
                     self.status_message = format!("Unknown: {}", cmd);
@@ -420,5 +471,27 @@ mod tests {
         assert_eq!(a.cursor, 64);
         a.page_up();
         assert_eq!(a.cursor, 0);
+    }
+
+    #[test]
+    fn test_paste() {
+        let mut a = app();
+        a.enter_visual_mode();
+        a.move_right();
+        a.move_right();
+        a.yank_visual();
+        a.cursor = 10;
+        a.paste_at_cursor();
+        assert_eq!(a.buffer.get(10), Some(0));
+        assert_eq!(a.buffer.get(11), Some(1));
+        assert_eq!(a.buffer.get(12), Some(2));
+    }
+    #[test]
+    fn test_fill() {
+        let mut a = app();
+        a.fill_range(0, 4, 0xFF);
+        assert_eq!(a.buffer.get(0), Some(0xFF));
+        assert_eq!(a.buffer.get(3), Some(0xFF));
+        assert_eq!(a.buffer.get(4), Some(4));
     }
 }

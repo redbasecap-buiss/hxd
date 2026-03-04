@@ -1,11 +1,11 @@
 [package]
 name = "hxd"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
-authors = ["Nicola Spieser <redbasecap-buiss@users.noreply.github.com>"]
+authors = ["Nicola Spieser <quantumnic@users.noreply.github.com>"]
 description = "Modern terminal hex editor in Rust"
 license = "MIT"
-repository = "https://github.com/redbasecap-buiss/hxd"
+repository = "https://github.com/quantumnic/hxd"
 keywords = ["hex", "editor", "tui", "binary", "terminal"]
 
 [dependencies]
