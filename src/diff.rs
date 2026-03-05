@@ -11,11 +11,20 @@ pub fn compare(a: &[u8], b: &[u8]) -> DiffResult {
     DiffResult { total, diffs }
 }
 
+fn ascii_char(b: u8) -> char {
+    if b.is_ascii_graphic() || b == b' ' {
+        b as char
+    } else {
+        '.'
+    }
+}
+
 pub fn print_diff(a: &[u8], b: &[u8], cols: usize) -> io::Result<()> {
     let mut o = io::stdout().lock();
     let max = a.len().max(b.len());
     for rs in (0..max).step_by(cols) {
         write!(o, "\x1b[36m{:08x}\x1b[0m  ", rs)?;
+        // Left hex
         for j in 0..cols {
             let off = rs + j;
             if off < a.len() {
@@ -29,7 +38,24 @@ pub fn print_diff(a: &[u8], b: &[u8], cols: usize) -> io::Result<()> {
                 write!(o, "   ")?;
             }
         }
-        write!(o, " \u{2502} ")?;
+        // Left ASCII
+        write!(o, " \x1b[2m|\x1b[0m")?;
+        for j in 0..cols {
+            let off = rs + j;
+            if off < a.len() {
+                let d = b.get(off) != Some(&a[off]);
+                let c = ascii_char(a[off]);
+                if d {
+                    write!(o, "\x1b[31m{}\x1b[0m", c)?;
+                } else {
+                    write!(o, "{}", c)?;
+                }
+            } else {
+                write!(o, " ")?;
+            }
+        }
+        write!(o, "\x1b[2m|\x1b[0m \u{2502} ")?;
+        // Right hex
         for j in 0..cols {
             let off = rs + j;
             if off < b.len() {
@@ -43,7 +69,23 @@ pub fn print_diff(a: &[u8], b: &[u8], cols: usize) -> io::Result<()> {
                 write!(o, "   ")?;
             }
         }
-        writeln!(o)?;
+        // Right ASCII
+        write!(o, " \x1b[2m|\x1b[0m")?;
+        for j in 0..cols {
+            let off = rs + j;
+            if off < b.len() {
+                let d = a.get(off) != Some(&b[off]);
+                let c = ascii_char(b[off]);
+                if d {
+                    write!(o, "\x1b[31m{}\x1b[0m", c)?;
+                } else {
+                    write!(o, "{}", c)?;
+                }
+            } else {
+                write!(o, " ")?;
+            }
+        }
+        writeln!(o, "\x1b[2m|\x1b[0m")?;
     }
     let r = compare(a, b);
     writeln!(o, "\n{} bytes, {} differences", r.total, r.diffs)?;
@@ -68,5 +110,12 @@ mod tests {
     #[test]
     fn test_empty() {
         assert_eq!(compare(b"", b"").diffs, 0);
+    }
+    #[test]
+    fn test_ascii_char() {
+        assert_eq!(ascii_char(b'A'), 'A');
+        assert_eq!(ascii_char(b' '), ' ');
+        assert_eq!(ascii_char(0x00), '.');
+        assert_eq!(ascii_char(0xFF), '.');
     }
 }
