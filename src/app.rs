@@ -1,4 +1,5 @@
 use crate::buffer::Buffer;
+use crate::stats;
 use crate::magic;
 use std::collections::HashMap;
 
@@ -308,8 +309,11 @@ impl App {
                 }
             }
             "q!" => self.should_quit = true,
+            "stats" => {
+                self.status_message = stats::compute(self.buffer.data()).summary();
+            }
             "help" => {
-                self.status_message = "q w wq :off :/pat n N i v m\x27 p Tab :fill off n byte".into();
+                self.status_message = "q w wq :off :/pat n N i v m\x27 p Tab :fill :stats".into();
             }
             "w" => match self.buffer.save() {
                 Ok(()) => self.status_message = "Written".into(),

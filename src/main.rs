@@ -7,6 +7,7 @@ mod dump;
 mod magic;
 mod patch;
 mod ui;
+mod stats;
 mod watcher;
 
 use app::{App, Mode};
