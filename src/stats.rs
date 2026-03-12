@@ -6,6 +6,26 @@ pub struct ByteStats {
     pub entropy: f64,
 }
 
+/// Format byte count as human-readable size (e.g. "1.5 KiB").
+fn format_size(bytes: usize) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    if bytes == 0 {
+        return "0 B".into();
+    }
+    let mut size = bytes as f64;
+    for &unit in UNITS {
+        if size < 1024.0 || unit == "TiB" {
+            return if size.fract() < 0.05 || unit == "B" {
+                format!("{:.0} {}", size, unit)
+            } else {
+                format!("{:.1} {}", size, unit)
+            };
+        }
+        size /= 1024.0;
+    }
+    format!("{} B", bytes)
+}
+
 /// Compute byte-level statistics for the given data slice.
 pub fn compute(data: &[u8]) -> ByteStats {
     if data.is_empty() {
@@ -59,8 +79,8 @@ impl ByteStats {
         let pct_null = 100.0 * self.null_count as f64 / self.size as f64;
         let pct_print = 100.0 * self.printable_count as f64 / self.size as f64;
         format!(
-            "{} bytes | entropy {:.2}/8 | null {:.1}% | printable {:.1}%",
-            self.size, self.entropy, pct_null, pct_print
+            "{} ({}) | entropy {:.2}/8 | null {:.1}% | printable {:.1}%",
+            format_size(self.size), self.size, self.entropy, pct_null, pct_print
         )
     }
 }
@@ -118,8 +138,27 @@ mod tests {
     fn test_summary_format() {
         let s = compute(b"AAAA");
         let summary = s.summary();
-        assert!(summary.contains("4 bytes"));
+        assert!(summary.contains("4 B"));
+        assert!(summary.contains("(4)"));
         assert!(summary.contains("entropy 0.00/8"));
         assert!(summary.contains("printable 100.0%"));
+    }
+
+    #[test]
+    fn test_format_size_bytes() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(512), "512 B");
+    }
+
+    #[test]
+    fn test_format_size_kib() {
+        assert_eq!(format_size(1024), "1 KiB");
+        assert_eq!(format_size(1536), "1.5 KiB");
+    }
+
+    #[test]
+    fn test_format_size_mib() {
+        assert_eq!(format_size(1048576), "1 MiB");
+        assert_eq!(format_size(2621440), "2.5 MiB");
     }
 }
