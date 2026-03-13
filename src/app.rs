@@ -309,11 +309,14 @@ impl App {
                 }
             }
             "q!" => self.should_quit = true,
+            "inspect" => {
+                self.status_message = self.inspect_at_cursor();
+            }
             "stats" => {
                 self.status_message = stats::compute(self.buffer.data()).summary();
             }
             "help" => {
-                self.status_message = "q w wq :off :/pat n N i v m\x27 p Tab :fill :stats".into();
+                self.status_message = "q w wq :off :/pat n N i v m\x27 p Tab :fill :stats :inspect".into();
             }
             "w" => match self.buffer.save() {
                 Ok(()) => self.status_message = "Written".into(),
@@ -366,6 +369,42 @@ impl App {
             self.status_message = format!("No bookmark '{}'", k);
         }
         self.pending_goto_bookmark = false;
+    }
+
+
+    /// Show multi-byte integer values at cursor (LE and BE).
+    pub fn inspect_at_cursor(&self) -> String {
+        let data = self.buffer.data();
+        let pos = self.cursor;
+        let remaining = data.len().saturating_sub(pos);
+        if remaining == 0 {
+            return "No data at cursor".into();
+        }
+        let mut parts: Vec<String> = Vec::new();
+        if remaining >= 2 {
+            let le = u16::from_le_bytes([data[pos], data[pos + 1]]);
+            let be = u16::from_be_bytes([data[pos], data[pos + 1]]);
+            parts.push(format!("u16 LE:{} BE:{}", le, be));
+        }
+        if remaining >= 4 {
+            let le = u32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]);
+            let be = u32::from_be_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]);
+            parts.push(format!("u32 LE:{} BE:{}", le, be));
+        }
+        if remaining >= 8 {
+            let mut le_bytes = [0u8; 8];
+            let mut be_bytes = [0u8; 8];
+            le_bytes.copy_from_slice(&data[pos..pos+8]);
+            be_bytes.copy_from_slice(&data[pos..pos+8]);
+            let le = u64::from_le_bytes(le_bytes);
+            let be = u64::from_be_bytes(be_bytes);
+            parts.push(format!("u64 LE:{} BE:{}", le, be));
+        }
+        if parts.is_empty() {
+            format!("u8: {}", data[pos])
+        } else {
+            parts.join(" | ")
+        }
     }
 
     pub fn current_byte_info(&self) -> String {
@@ -497,5 +536,34 @@ mod tests {
         assert_eq!(a.buffer.get(0), Some(0xFF));
         assert_eq!(a.buffer.get(3), Some(0xFF));
         assert_eq!(a.buffer.get(4), Some(4));
+    }
+
+    #[test]
+    fn test_inspect_at_cursor() {
+        let mut a = app();
+        a.cursor = 0;
+        let msg = a.inspect_at_cursor();
+        // Data is 0,1,2,...255 so u16 LE at 0 = 0x0100 = 256
+        assert!(msg.contains("u16 LE:256 BE:1"));
+        assert!(msg.contains("u32"));
+        assert!(msg.contains("u64"));
+    }
+
+    #[test]
+    fn test_inspect_near_end() {
+        let a = App::new(Buffer::from_bytes(vec![0xAA, 0xBB]), 16);
+        let mut a2 = a;
+        a2.cursor = 0;
+        let msg = a2.inspect_at_cursor();
+        assert!(msg.contains("u16"));
+        assert!(!msg.contains("u32")); // only 2 bytes
+    }
+
+    #[test]
+    fn test_inspect_command() {
+        let mut a = app();
+        a.command_input = "inspect".into();
+        a.execute_command();
+        assert!(a.status_message.contains("u16"));
     }
 }
