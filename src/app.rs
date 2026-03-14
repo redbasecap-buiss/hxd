@@ -407,6 +407,17 @@ impl App {
         }
     }
 
+    pub fn goto_row_start(&mut self) {
+        self.cursor = (self.cursor / self.cols) * self.cols;
+        self.ensure_visible();
+    }
+
+    pub fn goto_row_end(&mut self) {
+        let row_end = ((self.cursor / self.cols) + 1) * self.cols - 1;
+        self.cursor = row_end.min(self.buffer.len().saturating_sub(1));
+        self.ensure_visible();
+    }
+
     pub fn current_byte_info(&self) -> String {
         if let Some(b) = self.buffer.get(self.cursor) {
             let ch = if b.is_ascii_graphic() || b == b' ' {
@@ -565,5 +576,27 @@ mod tests {
         a.command_input = "inspect".into();
         a.execute_command();
         assert!(a.status_message.contains("u16"));
+    }
+
+    #[test]
+    fn test_goto_row_start() {
+        let mut a = app();
+        a.cursor = 5;
+        a.goto_row_start();
+        assert_eq!(a.cursor, 0);
+        a.cursor = 20;
+        a.goto_row_start();
+        assert_eq!(a.cursor, 16);
+    }
+
+    #[test]
+    fn test_goto_row_end() {
+        let mut a = app();
+        a.cursor = 5;
+        a.goto_row_end();
+        assert_eq!(a.cursor, 15);
+        a.cursor = 250;
+        a.goto_row_end();
+        assert_eq!(a.cursor, 255);
     }
 }

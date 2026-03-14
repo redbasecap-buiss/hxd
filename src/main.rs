@@ -167,6 +167,8 @@ fn handle_normal(app: &mut App, key: KeyCode, mods: KeyModifiers) {
         KeyCode::Char('j') | KeyCode::Down => app.move_down(),
         KeyCode::Char('g') => app.goto_start(),
         KeyCode::Char('G') => app.goto_end(),
+        KeyCode::Char('0') => app.goto_row_start(),
+        KeyCode::Char('$') => app.goto_row_end(),
         KeyCode::Char('d') if mods.contains(KeyModifiers::CONTROL) => app.page_down(),
         KeyCode::Char('u') if mods.contains(KeyModifiers::CONTROL) => app.page_up(),
         KeyCode::Char('i') => app.enter_edit_mode(),
@@ -263,6 +265,8 @@ fn handle_visual(app: &mut App, key: KeyCode) {
         KeyCode::Char('j') | KeyCode::Down => app.move_down(),
         KeyCode::Char('y') | KeyCode::Char('d') => app.yank_visual(),
         KeyCode::Char('G') => app.goto_end(),
+        KeyCode::Char('0') => app.goto_row_start(),
+        KeyCode::Char('$') => app.goto_row_end(),
         KeyCode::Char('g') => app.goto_start(),
         _ => {}
     }
