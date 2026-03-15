@@ -123,6 +123,21 @@ impl App {
             self.ensure_visible();
         }
     }
+
+    /// Jump forward by WORD_SIZE bytes (like vim w).
+    pub fn move_word_forward(&mut self) {
+        const WORD_SIZE: usize = 4;
+        self.cursor = (self.cursor + WORD_SIZE).min(self.buffer.len().saturating_sub(1));
+        self.ensure_visible();
+    }
+
+    /// Jump backward by WORD_SIZE bytes (like vim b).
+    pub fn move_word_backward(&mut self) {
+        const WORD_SIZE: usize = 4;
+        self.cursor = self.cursor.saturating_sub(WORD_SIZE);
+        self.ensure_visible();
+    }
+
     pub fn goto_start(&mut self) {
         self.cursor = 0;
         self.scroll_offset = 0;
@@ -316,7 +331,7 @@ impl App {
                 self.status_message = stats::compute(self.buffer.data()).summary();
             }
             "help" => {
-                self.status_message = "q w wq :off :/pat n N i v m\x27 p Tab :fill :stats :inspect".into();
+                self.status_message = "q w wq :off :/pat n N i v m\x27 p w b Tab :fill :stats :inspect".into();
             }
             "w" => match self.buffer.save() {
                 Ok(()) => self.status_message = "Written".into(),
@@ -598,5 +613,34 @@ mod tests {
         a.cursor = 250;
         a.goto_row_end();
         assert_eq!(a.cursor, 255);
+    }
+
+    #[test]
+    fn test_word_forward() {
+        let mut a = app();
+        a.move_word_forward();
+        assert_eq!(a.cursor, 4);
+        a.move_word_forward();
+        assert_eq!(a.cursor, 8);
+    }
+
+    #[test]
+    fn test_word_backward() {
+        let mut a = app();
+        a.cursor = 10;
+        a.move_word_backward();
+        assert_eq!(a.cursor, 6);
+        a.move_word_backward();
+        assert_eq!(a.cursor, 2);
+        a.move_word_backward();
+        assert_eq!(a.cursor, 0);
+    }
+
+    #[test]
+    fn test_word_forward_clamp() {
+        let mut a = app();
+        a.cursor = 254;
+        a.move_word_forward();
+        assert_eq!(a.cursor, 255); // clamped to last byte
     }
 }
